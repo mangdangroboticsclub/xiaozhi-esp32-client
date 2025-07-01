@@ -1,0 +1,15 @@
+{
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "TurtleBot",
+            "sdkconfig_append": [
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v1/16m.csv\"",
+                "CONFIG_AUDIO_BOARD_CUSTOM=y",
+                "CONFIG_USE_WAKE_WORD_DETECT=y",
+                "CONFIG_PM_ENABLE=y",
+                "CONFIG_FREERTOS_USE_TICKLESS_IDLE=y"
+            ]
+        }
+    ]
+}
