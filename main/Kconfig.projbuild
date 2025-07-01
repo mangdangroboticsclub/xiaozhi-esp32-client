@@ -169,6 +169,9 @@ choice BOARD_TYPE
     config BOARD_TYPE_TUDOUZI
         bool "土豆子"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_TURTLEBOT
+        bool "MangDang TurtleBot"
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_LILYGO_T_CIRCLE_S3
         bool "LILYGO T-Circle-S3"
         depends on IDF_TARGET_ESP32S3
