@@ -1,6 +1,6 @@
 # Mangdang Turtlebot with Xiaozhi Client Setup Guide
 
-<img src="https://drive.google.com/uc?export=view&id=16KVJ1fb496YkroQcYdX7NpUUEJHuMKzh" alt="Mangdang Turtlebot Setup" style="max-width: 100%; height: auto; border-radius: 8px; margin: 20px 0;">
+<img src="https://drive.google.com/uc?export=view&id=16KVJ1fb496YkroQcYdX7NpUUEJHuMKzh" alt="Mangdang Turtlebot Setup" style="width: 300px; height: auto; border-radius: 8px; margin: 20px 0;">
 
 This guide will walk you through setting up the Xiaozhi assistant client on your Mangdang Turtlebot using ESP32-S3.
 
