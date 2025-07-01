@@ -98,7 +98,7 @@ The robot will announce: "Please enter your wifi configuration mode"
 
 ### 12. Configure Internet WiFi
 
-1. Open a web browser and go to: `https://192.168.4.1`
+1. Open a web browser and go to: `http://192.168.4.1`
 2. Select your home WiFi network
 3. Enter your WiFi password
 4. Submit the configuration
