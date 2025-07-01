@@ -30,7 +30,7 @@ After installation, launch the ESP-IDF PowerShell from your Start menu.
 Run the following commands in the ESP-IDF PowerShell:
 
 ```bash
-git clone https://github.com/Bariest/xiaozhi-esp32-client.git
+git clone https://github.com/mangdangroboticsclub/xiaozhi-esp32-client.git
 cd xiaozhi-esp32-client
 git checkout Turtle
 ```
