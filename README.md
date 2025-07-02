@@ -16,7 +16,7 @@ This guide will walk you through setting up the Xiaozhi assistant client on your
 
 ### 1. Install ESP-IDF
 
-Download and install ESP-IDF from  (For windows):
+Download and install ESP-IDF from (For windows):
 ```
 https://dl.espressif.com/dl/esp-idf/?idf=4.4
 ```
@@ -53,6 +53,12 @@ Navigate to **Xiaozhi Assistant** settings and configure:
 - **Default Language**: Choose Chinese or English
 - **Board Type**: **IMPORTANT** - Change to "Mangdang Turtlebot"
 - **Audio Settings**: Enable both "AFE" and "Audio Noise Reduction"
+
+Next, navigate to **ESP Speech Recognition** settings and configure:
+- Go to **Load Multiple Wake Words**
+- Select **WakeNet 9**
+- Choose your preferred wake word from the available options
+- Save the configuration
 
 ### 6. Build the Project
 
@@ -124,5 +130,6 @@ You can view real-time input and output logs in the ESP-IDF monitor window.
 - Ensure you're using the correct COM port number
 - If WiFi configuration fails, restart from step 10
 - Check the monitor output for any error messages
+- If wake word detection isn't working, verify WakeNet 9 is properly selected
 
-Your Mangdang Turtlebot is now ready to use with the Xiaozhi AI assistant!
+Your Mangdang Turtlebot is now ready to use with the Xiaozhi AI assistant and custom wake word recognition!
