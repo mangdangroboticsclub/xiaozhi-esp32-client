@@ -5,6 +5,7 @@ set(SOURCES "audio_codecs/audio_codec.cc"
             "audio_codecs/es8374_audio_codec.cc"
             "audio_codecs/es8388_audio_codec.cc"
             "audio_processing/audio_debugger.cc"
+	    "audio_codecs/santa_audio_codec.cc"
             "led/single_led.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
@@ -71,6 +72,8 @@ elseif(CONFIG_BOARD_TYPE_LICHUANG_DEV)
     set(BOARD_TYPE "lichuang-dev")
 elseif(CONFIG_BOARD_TYPE_LICHUANG_C3_DEV)
     set(BOARD_TYPE "lichuang-c3-dev")
+elseif(CONFIG_BOARD_TYPE_HEYSANTA)
+    set(BOARD_TYPE "heysanta")
 elseif(CONFIG_BOARD_TYPE_MAGICLICK_2P4)
     set(BOARD_TYPE "magiclick-2p4")
 elseif(CONFIG_BOARD_TYPE_MAGICLICK_2P5)
