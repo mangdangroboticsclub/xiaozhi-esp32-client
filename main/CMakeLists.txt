@@ -319,9 +319,10 @@ set(SPIFFS_DIR "${CMAKE_BINARY_DIR}/emoji")
 file(MAKE_DIRECTORY ${SPIFFS_DIR})
 set(FILES_TO_DOWNLOAD "")
 list(APPEND FILES_TO_DOWNLOAD "heart.aaf" "bell.aaf" "star.aaf")
-file(COPY "C:/Espressif/frameworks/esp-idf-v5.4.1/FIG/emoji/heart.aaf" DESTINATION "${SPIFFS_DIR}")
-file(COPY "C:/Espressif/frameworks/esp-idf-v5.4.1/FIG/emoji/bell.aaf" DESTINATION "${SPIFFS_DIR}")
-file(COPY "C:/Espressif/frameworks/esp-idf-v5.4.1/FIG/emoji/star.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/heart.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/bell.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/star.aaf" DESTINATION "${SPIFFS_DIR}")
+
 
 spiffs_create_partition_assets(
     assets_A
