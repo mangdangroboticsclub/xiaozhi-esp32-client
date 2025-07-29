@@ -7,6 +7,11 @@
 #include "i2c_device.h"
 #include "iot/thing_manager.h"
 #include "esp32_camera.h"
+#include "mcp_server.h"
+//#include "no_audio_codec.h"
+#include "dummy_audio_codec.h"
+#include "audio_codecs/santa_audio_codec.h"
+#include "audio_codecs/no_audio_codec.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -16,55 +21,29 @@
 #include <esp_lcd_touch_ft5x06.h>
 #include <esp_lvgl_port.h>
 #include <lvgl.h>
-
+#include "driver/ledc.h"
+#include "driver/gpio.h"
+#include "esp_system.h"
+#include "esp_random.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "LichuangDevBoard"
 
 LV_FONT_DECLARE(font_puhui_20_4);
 LV_FONT_DECLARE(font_awesome_20_4);
 
-class Pca9557 : public I2cDevice {
-public:
-    Pca9557(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {
-        WriteReg(0x01, 0x03);
-        WriteReg(0x03, 0xf8);
-    }
-
-    void SetOutputState(uint8_t bit, uint8_t level) {
-        uint8_t data = ReadReg(0x01);
-        data = (data & ~(1 << bit)) | (level << bit);
-        WriteReg(0x01, data);
-    }
-};
-
-class CustomAudioCodec : public BoxAudioCodec {
-private:
-    Pca9557* pca9557_;
+class lichuangcodec : public SantaAudioCodec  {
+private:    
 
 public:
-    CustomAudioCodec(i2c_master_bus_handle_t i2c_bus, Pca9557* pca9557) 
-        : BoxAudioCodec(i2c_bus, 
-                       AUDIO_INPUT_SAMPLE_RATE, 
-                       AUDIO_OUTPUT_SAMPLE_RATE,
-                       AUDIO_I2S_GPIO_MCLK, 
-                       AUDIO_I2S_GPIO_BCLK, 
-                       AUDIO_I2S_GPIO_WS, 
-                       AUDIO_I2S_GPIO_DOUT, 
-                       AUDIO_I2S_GPIO_DIN,
-                       GPIO_NUM_NC, 
-                       AUDIO_CODEC_ES8311_ADDR, 
-                       AUDIO_CODEC_ES7210_ADDR, 
-                       AUDIO_INPUT_REFERENCE),
-          pca9557_(pca9557) {
-    }
+    lichuangcodec(i2c_master_bus_handle_t i2c_bus, int input_sample_rate, int output_sample_rate,
+    gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din, uint8_t es7210_addr, bool input_reference)
+        : SantaAudioCodec(i2c_bus, input_sample_rate, output_sample_rate,
+                             mclk,  bclk,  ws,  dout,  din, es7210_addr, input_reference) {}
 
     virtual void EnableOutput(bool enable) override {
-        BoxAudioCodec::EnableOutput(enable);
-        if (enable) {
-            pca9557_->SetOutputState(1, 1);
-        } else {
-            pca9557_->SetOutputState(1, 0);
-        }
+        SantaAudioCodec::EnableOutput(enable);
     }
 };
 
@@ -73,9 +52,318 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     i2c_master_dev_handle_t pca9557_handle_;
     Button boot_button_;
+    Button wake_button_;
     LcdDisplay* display_;
-    Pca9557* pca9557_;
     Esp32Camera* camera_;
+    
+    // Add motor state tracking
+    bool motors_initialized_ = false;
+    bool motors_enabled_ = false;
+
+    void InitializeMotors() {
+        ESP_LOGI(TAG, "Initializing LEDC for motor control...");
+        
+        // First, configure all motor control pins as outputs and set them to safe states
+        gpio_config_t gpio_conf = {
+            .pin_bit_mask = (1ULL << HEAD_DIR_PIN) | (1ULL << HIP_FWD_PIN) | (1ULL << HIP_BWD_PIN) | (1ULL << HEAD_PWM_PIN),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE
+        };
+        gpio_config(&gpio_conf);
+        
+        // Set all pins to safe states (LOW) before configuring PWM
+        gpio_set_level(HEAD_DIR_PIN, 0);
+        gpio_set_level(HEAD_PWM_PIN, 0);
+        gpio_set_level(HIP_FWD_PIN, 0);
+        gpio_set_level(HIP_BWD_PIN, 0);
+        
+        ESP_LOGI(TAG, "Set all motor pins to safe states");
+        
+        // Configure LEDC timer
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode       = LEDC_MODE,
+            .duty_resolution  = LEDC_DUTY_RES,
+            .timer_num        = LEDC_TIMER,
+            .freq_hz          = LEDC_FREQUENCY,
+            .clk_cfg          = LEDC_AUTO_CLK
+        };
+        ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+        // Configure PWM channels with 0 duty cycle
+        ledc_channel_config_t channels[] = {
+            {
+                .gpio_num       = HEAD_PWM_PIN,
+                .speed_mode     = LEDC_MODE,
+                .channel        = HEAD_PWM_CHANNEL,
+                .intr_type      = LEDC_INTR_DISABLE,
+                .timer_sel      = LEDC_TIMER,
+                .duty           = 0,
+                .hpoint         = 0
+            },
+            {
+                .gpio_num       = HIP_FWD_PIN,
+                .speed_mode     = LEDC_MODE,
+                .channel        = HIP_FWD_CHANNEL,
+                .intr_type      = LEDC_INTR_DISABLE,
+                .timer_sel      = LEDC_TIMER,
+                .duty           = 0,
+                .hpoint         = 0
+            },
+            {
+                .gpio_num       = HIP_BWD_PIN,
+                .speed_mode     = LEDC_MODE,
+                .channel        = HIP_BWD_CHANNEL,
+                .intr_type      = LEDC_INTR_DISABLE,
+                .timer_sel      = LEDC_TIMER,
+                .duty           = 0,
+                .hpoint         = 0
+            }
+        };
+        
+        for (int i = 0; i < 3; i++) {
+            ESP_ERROR_CHECK(ledc_channel_config(&channels[i]));
+            // Explicitly set duty to 0 and update
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, channels[i].channel, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, channels[i].channel));
+            ESP_LOGI(TAG, "Configured PWM channel %d on GPIO %d with 0 duty", channels[i].channel, channels[i].gpio_num);
+        }
+
+        motors_initialized_ = true;
+        motors_enabled_ = false;  // Motors are disabled by default
+        
+        // Ensure all motors are stopped
+        ForceStopAllMotors();
+        
+        ESP_LOGI(TAG, "Motor initialization complete - all motors stopped and disabled");
+    }
+
+    // Add this new method for forceful stopping
+    void ForceStopAllMotors() {
+        if (!motors_initialized_) {
+            return;  // Silent return if not initialized
+        }
+        
+        // Check if motors are actually running before stopping
+        uint32_t head_duty = ledc_get_duty(LEDC_MODE, HEAD_PWM_CHANNEL);
+        uint32_t hip_fwd_duty = ledc_get_duty(LEDC_MODE, HIP_FWD_CHANNEL);
+        uint32_t hip_bwd_duty = ledc_get_duty(LEDC_MODE, HIP_BWD_CHANNEL);
+        
+        bool motors_were_running = (head_duty > 0 || hip_fwd_duty > 0 || hip_bwd_duty > 0);
+        
+        // Stop all motors
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HEAD_PWM_CHANNEL, 0));
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HEAD_PWM_CHANNEL));
+        ESP_ERROR_CHECK(gpio_set_level(HEAD_DIR_PIN, 0));
+        
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_FWD_CHANNEL, 0));
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_FWD_CHANNEL));
+        ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_BWD_CHANNEL, 0));
+        ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_BWD_CHANNEL));
+        
+        // Set GPIO pins directly to LOW as backup
+        gpio_set_level(HEAD_PWM_PIN, 0);
+        gpio_set_level(HIP_FWD_PIN, 0);
+        gpio_set_level(HIP_BWD_PIN, 0);
+        
+        motors_enabled_ = false;
+        
+        // Only log if motors were actually running
+        if (motors_were_running) {
+            ESP_LOGI(TAG, "Motors were running unexpectedly - force stopped");
+        }
+    }
+
+    // Add motor enable/disable control
+    void EnableMotors(bool enable) {
+        motors_enabled_ = enable;
+        ESP_LOGI(TAG, "Motors %s", enable ? "ENABLED" : "DISABLED");
+        
+        if (!enable) {
+            ForceStopAllMotors();
+        }
+    }
+
+    void SetHeadSpeed(int speed) {
+        if (!motors_enabled_) {
+            ESP_LOGW(TAG, "Motors disabled, ignoring head speed command: %d", speed);
+            return;
+        }
+        
+        ESP_LOGI(TAG, "Setting head speed to %d", speed);
+        
+        if (speed > 0) {
+            uint32_t duty = (uint32_t)((abs(speed) * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HEAD_PWM_CHANNEL, duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HEAD_PWM_CHANNEL));
+            ESP_ERROR_CHECK(gpio_set_level(HEAD_DIR_PIN, 1));
+            ESP_LOGI(TAG, "Head forward: PWM duty=%lu, DIR=1", duty);
+        } else if (speed < 0) {
+            uint32_t duty = (uint32_t)((abs(speed) * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HEAD_PWM_CHANNEL, duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HEAD_PWM_CHANNEL));
+            ESP_ERROR_CHECK(gpio_set_level(HEAD_DIR_PIN, 0));
+            ESP_LOGI(TAG, "Head backward: PWM duty=%lu, DIR=0", duty);
+        } else {
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HEAD_PWM_CHANNEL, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HEAD_PWM_CHANNEL));
+            ESP_ERROR_CHECK(gpio_set_level(HEAD_DIR_PIN, 0));
+            ESP_LOGI(TAG, "Head stopped");
+        }
+    }
+
+    void SetHipSpeed(int speed) {
+        if (!motors_enabled_) {
+            ESP_LOGW(TAG, "Motors disabled, ignoring hip speed command: %d", speed);
+            return;
+        }
+        
+        ESP_LOGI(TAG, "Setting hip speed to %d", speed);
+        
+        if (speed > 0) {
+            uint32_t duty = (uint32_t)((abs(speed) * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_FWD_CHANNEL, duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_FWD_CHANNEL));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_BWD_CHANNEL, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_BWD_CHANNEL));
+            ESP_LOGI(TAG, "Hip forward: FWD duty=%lu, BWD duty=0", duty);
+        } else if (speed < 0) {
+            uint32_t duty = (uint32_t)((abs(speed) * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_FWD_CHANNEL, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_FWD_CHANNEL));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_BWD_CHANNEL, duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_BWD_CHANNEL));
+            ESP_LOGI(TAG, "Hip backward: FWD duty=0, BWD duty=%lu", duty);
+        } else {
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_FWD_CHANNEL, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_FWD_CHANNEL));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, HIP_BWD_CHANNEL, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, HIP_BWD_CHANNEL));
+            ESP_LOGI(TAG, "Hip stopped");
+        }
+    }
+
+    void SparkBotDance() {
+        ESP_LOGI(TAG, "Starting original dance sequence!");
+        EnableMotors(true);  // Enable motors for dance
+        
+        int cnt = 0;
+        while (1) {
+            cnt++;
+            if (cnt == 5) {
+                SetHeadSpeed(0); 
+                SetHipSpeed(0);
+                break;
+            }
+             
+            for (int i = 0; i < 15; i++) {
+                if (i <= 5) {
+                    SetHeadSpeed(80); 
+                    vTaskDelay(300 / portTICK_PERIOD_MS);
+                } else {
+                    if (i == 6) SetHeadSpeed(0);
+                    if (i % 2 == 0) {
+                        SetHipSpeed(100);
+                    } else {
+                        SetHipSpeed(0);
+                    }
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                }
+            }
+            SetHipSpeed(0);
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+        
+        EnableMotors(false);  // Disable motors after dance
+        ESP_LOGI(TAG, "Dance sequence complete!");
+    }
+
+    void HeadShakeOnly() {
+        ESP_LOGI(TAG, "Starting smooth randomized head shake sequence!");
+        EnableMotors(true);  // Enable motors for head shake
+        
+        for (int i = 0; i < 100; i++) {
+            int speed1 = 90 + (esp_random() % 11);
+            int speed2 = 90 + (esp_random() % 11);
+            
+            SetHeadSpeed(speed1);
+            vTaskDelay((35 + esp_random() % 11) / portTICK_PERIOD_MS);
+            
+            SetHeadSpeed(-speed2);
+            vTaskDelay((35 + esp_random() % 11) / portTICK_PERIOD_MS);
+        }
+        SetHeadSpeed(0);
+        EnableMotors(false);  // Disable motors after head shake
+        
+        ESP_LOGI(TAG, "Head shake complete!");
+    }
+
+    void HipShakeOnly() {
+        ESP_LOGI(TAG, "Starting smooth hip shake sequence!");
+        EnableMotors(true);  // Enable motors for hip shake
+        
+        for (int i = 0; i < 8; i++) {
+            SetHipSpeed(70);
+            vTaskDelay(150 / portTICK_PERIOD_MS);
+            SetHipSpeed(0);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+            SetHipSpeed(-70);
+            vTaskDelay(150 / portTICK_PERIOD_MS);
+            SetHipSpeed(0);
+            vTaskDelay(50 / portTICK_PERIOD_MS);
+        }
+        SetHipSpeed(0);
+        EnableMotors(false);  // Disable motors after hip shake
+        
+        ESP_LOGI(TAG, "Hip shake complete!");
+    }
+
+    // Add a periodic task to monitor and stop unwanted motor movement
+    static void MotorWatchdogTask(void* param) {
+        LichuangDevBoard* board = (LichuangDevBoard*)param;
+        while (1) {
+            if (!board->motors_enabled_) {
+                board->ForceStopAllMotors();
+            }
+            vTaskDelay(2000 / portTICK_PERIOD_MS);  // Check every 2 seconds instead of 500ms
+        }
+    }
+
+    void InitializeTools() {
+        auto& mcp_server = McpServer::GetInstance();
+        
+        mcp_server.AddTool("self.chassis.dance", "跳舞", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            ESP_LOGI(TAG, "Dance command received");
+            // Create a task to run the dance so it doesn't block the MCP response
+            auto dance_task = [](void* param) {
+                ((LichuangDevBoard*)param)->SparkBotDance();
+                vTaskDelete(NULL);
+            };
+            xTaskCreate(dance_task, "dance_task", 4096, this, 5, NULL);
+            return true;
+        });
+        
+        mcp_server.AddTool("self_chassis_shake_body", "摇头", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            ESP_LOGI(TAG, "Head shake command received");
+            auto head_task = [](void* param) {
+                ((LichuangDevBoard*)param)->HeadShakeOnly();
+                vTaskDelete(NULL);
+            };
+            xTaskCreate(head_task, "head_task", 4096, this, 5, NULL);
+            return true;
+        });
+        
+        mcp_server.AddTool("self_chassis_shake_hip", "摇屁股", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            ESP_LOGI(TAG, "Hip shake command received");
+            auto hip_task = [](void* param) {
+                ((LichuangDevBoard*)param)->HipShakeOnly();
+                vTaskDelete(NULL);
+            };
+            xTaskCreate(hip_task, "hip_task", 4096, this, 5, NULL);
+            return true;
+        });
+    }
 
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -92,9 +380,6 @@ private:
             },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
-
-        // Initialize PCA9557
-        pca9557_ = new Pca9557(i2c_bus_, 0x19);
     }
 
     void InitializeSpi() {
@@ -109,7 +394,17 @@ private:
     }
 
     void InitializeButtons() {
+        // Boot button functionality
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                ResetWifiConfiguration();
+            }
+            app.ToggleChatState();
+        });
+
+        // Wake button with same functionality as boot button
+        wake_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
@@ -119,6 +414,14 @@ private:
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+            }
+        });
+
+        // Add same double-click functionality to wake button
+        wake_button_.OnDoubleClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
@@ -151,12 +454,12 @@ private:
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
         
         esp_lcd_panel_reset(panel);
-        pca9557_->SetOutputState(0, 0);
 
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, true);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        esp_lcd_panel_disp_on_off(panel, true);
         display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
                                     {
@@ -170,48 +473,10 @@ private:
                                     });
     }
 
-    void InitializeTouch()
-    {
-        esp_lcd_touch_handle_t tp;
-        esp_lcd_touch_config_t tp_cfg = {
-            .x_max = DISPLAY_WIDTH,
-            .y_max = DISPLAY_HEIGHT,
-            .rst_gpio_num = GPIO_NUM_NC, // Shared with LCD reset
-            .int_gpio_num = GPIO_NUM_NC, 
-            .levels = {
-                .reset = 0,
-                .interrupt = 0,
-            },
-            .flags = {
-                .swap_xy = 1,
-                .mirror_x = 1,
-                .mirror_y = 0,
-            },
-        };
-        esp_lcd_panel_io_handle_t tp_io_handle = NULL;
-        esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
-        tp_io_config.scl_speed_hz = 400000;
-
-        esp_lcd_new_panel_io_i2c(i2c_bus_, &tp_io_config, &tp_io_handle);
-        esp_lcd_touch_new_i2c_ft5x06(tp_io_handle, &tp_cfg, &tp);
-        assert(tp);
-
-        /* Add touch input (for selected screen) */
-        const lvgl_port_touch_cfg_t touch_cfg = {
-            .disp = lv_display_get_default(), 
-            .handle = tp,
-        };
-
-        lvgl_port_add_touch(&touch_cfg);
-    }
-
     void InitializeCamera() {
-        // Open camera power
-        pca9557_->SetOutputState(2, 0);
-
         camera_config_t config = {};
-        config.ledc_channel = LEDC_CHANNEL_2;  // LEDC通道选择  用于生成XCLK时钟 但是S3不用
-        config.ledc_timer = LEDC_TIMER_2; // LEDC timer选择  用于生成XCLK时钟 但是S3不用
+        config.ledc_channel = LEDC_CHANNEL_3;  // Changed from LEDC_CHANNEL_2 to avoid conflict with motors
+        config.ledc_timer = LEDC_TIMER_1; // Changed from LEDC_TIMER_2 to avoid conflict with motors
         config.pin_d0 = CAMERA_PIN_D0;
         config.pin_d1 = CAMERA_PIN_D1;
         config.pin_d2 = CAMERA_PIN_D2;
@@ -239,15 +504,47 @@ private:
 
         camera_ = new Esp32Camera(config);
     }
+    void InitializeMotorPinsSafe() {
+        ESP_LOGI(TAG, "Setting motor pins to safe states immediately...");
+        
+        // Configure all motor pins as outputs with safe states IMMEDIATELY
+        gpio_config_t gpio_conf = {
+            .pin_bit_mask = (1ULL << HEAD_DIR_PIN) | (1ULL << HIP_FWD_PIN) | 
+                        (1ULL << HIP_BWD_PIN) | (1ULL << HEAD_PWM_PIN),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,      // ← CORRECT
+            .pull_down_en = GPIO_PULLDOWN_ENABLE,   // ← CORRECT  
+            .intr_type = GPIO_INTR_DISABLE
+        };
+        gpio_config(&gpio_conf);
+        
+        // Force all pins LOW immediately
+        gpio_set_level(HEAD_DIR_PIN, 0);
+        gpio_set_level(HEAD_PWM_PIN, 0);
+        gpio_set_level(HIP_FWD_PIN, 0);
+        gpio_set_level(HIP_BWD_PIN, 0);
+        
+        ESP_LOGI(TAG, "All motor pins forced to LOW state");
+    }
 
 public:
-    LichuangDevBoard() : boot_button_(BOOT_BUTTON_GPIO) {
+    LichuangDevBoard() : boot_button_(BOOT_BUTTON_GPIO), wake_button_(WAKE_BUTTON_GPIO) {
+        InitializeMotorPinsSafe(); 
         InitializeI2c();
         InitializeSpi();
         InitializeSt7789Display();
-        InitializeTouch();
         InitializeButtons();
         InitializeCamera();
+        // InitializeMotors();
+        InitializeTools();
+
+        // Start motor watchdog task
+        // xTaskCreate(MotorWatchdogTask, "motor_watchdog", 2048, this, 1, NULL);
+
+        // Ensure motors are stopped and disabled after all initialization
+        ForceStopAllMotors();
+        EnableMotors(false);
+
 
 #if CONFIG_IOT_PROTOCOL_XIAOZHI
         auto& thing_manager = iot::ThingManager::GetInstance();
@@ -258,9 +555,8 @@ public:
     }
 
     virtual AudioCodec* GetAudioCodec() override {
-        static CustomAudioCodec audio_codec(
-            i2c_bus_, 
-            pca9557_);
+        static lichuangcodec audio_codec(i2c_bus_, AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_MCLK, AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN, AUDIO_CODEC_ES7210_ADDR, AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
 

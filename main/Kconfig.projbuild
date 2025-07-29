@@ -100,9 +100,6 @@ choice BOARD_TYPE
     config BOARD_TYPE_LICHUANG_C3_DEV
         bool "立创·实战派ESP32-C3开发板"
         depends on IDF_TARGET_ESP32C3
-    config BOARD_TYPE_HEYSANTA
-        bool "HEYSANTA"
-        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_DF_K10
         bool "DFRobot 行空板 k10"
         depends on IDF_TARGET_ESP32S3
@@ -138,7 +135,7 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_ATOMMATRIX_ECHO_BASE
         bool "AtomMatrix + Echo Base"
-        depends on IDF_TARGET_ESP32S3
+        depends on IDF_TARGET_ESP32
     config BOARD_TYPE_ESP32S3_Touch_AMOLED_1_8
         bool "Waveshare ESP32-S3-Touch-AMOLED-1.8"
         depends on IDF_TARGET_ESP32S3
@@ -171,6 +168,9 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32P4
     config BOARD_TYPE_TUDOUZI
         bool "土豆子"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_TURTLEBOT
+        bool "MangDang TurtleBot"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_LILYGO_T_CIRCLE_S3
         bool "LILYGO T-Circle-S3"
@@ -243,6 +243,9 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_GENJUTECH_S3_1_54TFT
         bool "亘具科技1.54(s3)"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_HEYSANTA
+        bool "HeySanta"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_ESP_S3_LCD_EV_Board
         bool "乐鑫ESP S3 LCD EV Board开发板"

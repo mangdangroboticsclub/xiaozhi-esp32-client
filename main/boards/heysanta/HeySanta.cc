@@ -8,6 +8,7 @@
 #include "iot/thing_manager.h"
 #include "esp32_camera.h"
 #include "mcp_server.h"
+#include "dummy_audio_codec.h"
 #include "audio_codecs/santa_audio_codec.h"
 #include "audio_codecs/no_audio_codec.h"
 
