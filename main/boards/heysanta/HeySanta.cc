@@ -8,7 +8,6 @@
 #include "iot/thing_manager.h"
 #include "esp32_camera.h"
 #include "mcp_server.h"
-#include "dummy_audio_codec.h"
 #include "audio_codecs/santa_audio_codec.h"
 #include "audio_codecs/no_audio_codec.h"
 
@@ -25,7 +24,7 @@
 #include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-
+#include "emoji_display.h"
 // Remove LEDC includes - not needed for simple on/off control
 
 #define TAG "HeySanta"
@@ -53,9 +52,11 @@ private:
     i2c_master_dev_handle_t pca9557_handle_;
     Button boot_button_;
     Button wake_button_;
-    LcdDisplay* display_;
+    // LcdDisplay* display_;
+    anim::EmojiWidget* display_ = nullptr;
     Esp32Camera* camera_;
-
+    
+    
     // Simple on/off motor initialization - NO PWM/LEDC
     void InitializeMotors() {
         ESP_LOGI(TAG, "Initializing motors (simple on/off mode)...");
@@ -123,29 +124,34 @@ private:
     }
 
     // Improved dance with on/off control
+    // Improved dance with faster timing
     void SparkBotDance() {
         ESP_LOGI(TAG, "Starting simple on/off dance!");
         
         for (int cnt = 0; cnt < 5; cnt++) {
-            // Head shake sequence
+            // Head shake sequence - much faster
             for (int i = 0; i < 10; i++) {
                 SetHeadSpeed(100);  // Full speed forward
-                vTaskDelay(200 / portTICK_PERIOD_MS);
+                vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced from 500ms to 100ms
                 SetHeadSpeed(-100); // Full speed backward
-                vTaskDelay(200 / portTICK_PERIOD_MS);
+                vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced from 500ms to 100ms
             }
             SetHeadSpeed(0);  // Stop head
             
-            // Hip shake sequence
+            // Hip shake sequence - gentler with stops
             for (int i = 0; i < 8; i++) {
                 SetHipSpeed(100);   // Forward
-                vTaskDelay(300 / portTICK_PERIOD_MS);
+                vTaskDelay(150 / portTICK_PERIOD_MS);  // Reduced from 250ms to 150ms
+                SetHipSpeed(0);     // Stop
+                vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief stop
                 SetHipSpeed(-100);  // Backward
-                vTaskDelay(300 / portTICK_PERIOD_MS);
+                vTaskDelay(150 / portTICK_PERIOD_MS);  // Reduced from 250ms to 150ms
+                SetHipSpeed(0);     // Stop
+                vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief stop
             }
             SetHipSpeed(0);  // Stop hip
             
-            vTaskDelay(1000 / portTICK_PERIOD_MS);  // Pause between cycles
+            vTaskDelay(200 / portTICK_PERIOD_MS);  // Much shorter pause between cycles (was 300ms)
         }
         
         StopAllMotors();
@@ -155,15 +161,38 @@ private:
     void HeadShakeOnly() {
         ESP_LOGI(TAG, "Head shake (on/off mode)!");
         
-        for (int i = 0; i < 50; i++) {  // Reduced count for on/off
+        for (int i = 0; i < 50; i++) {
             SetHeadSpeed(100);   // Full speed forward
-            vTaskDelay(80 / portTICK_PERIOD_MS);
+            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
             
             SetHeadSpeed(-100);  // Full speed backward
-            vTaskDelay(80 / portTICK_PERIOD_MS);
+            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
         }
         SetHeadSpeed(0);
         ESP_LOGI(TAG, "Head shake complete!");
+    }
+    void HeadShake_start() {
+        ESP_LOGI(TAG, "start ");
+        for (int i = 0; i < 2; i++) {
+            SetHeadSpeed(100);   // Full speed forward
+            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            
+            SetHeadSpeed(-100);  // Full speed backward
+            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+        }
+        // ESP_LOGI(TAG, "Head shake complete!");
+    }
+    void HeadShake_stop() {
+        ESP_LOGI(TAG, "stop Head shake (on/off mode)!");
+        for (int i = 0; i < 1; i++) {
+            SetHeadSpeed(100);   // Full speed forward
+            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            
+            SetHeadSpeed(-100);  // Full speed backward
+            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+        }
+        SetHeadSpeed(0);
+        // ESP_LOGI(TAG, "Head shake complete!");
     }
 
     void HipShakeOnly() {
@@ -171,13 +200,13 @@ private:
         
         for (int i = 0; i < 12; i++) {
             SetHipSpeed(100);    // Forward
-            vTaskDelay(150 / portTICK_PERIOD_MS);
-            SetHipSpeed(0);      // Stop
-            vTaskDelay(50 / portTICK_PERIOD_MS);
+            vTaskDelay(150 / portTICK_PERIOD_MS);  // Faster (was 200ms)
+            SetHipSpeed(0);      // Stop - adds gentleness
+            vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief pause
             SetHipSpeed(-100);   // Backward
-            vTaskDelay(150 / portTICK_PERIOD_MS);
-            SetHipSpeed(0);      // Stop
-            vTaskDelay(50 / portTICK_PERIOD_MS);
+            vTaskDelay(150 / portTICK_PERIOD_MS);  // Faster (was 200ms)
+            SetHipSpeed(0);      // Stop - adds gentleness
+            vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief pause
         }
         SetHipSpeed(0);
         ESP_LOGI(TAG, "Hip shake complete!");
@@ -229,6 +258,17 @@ private:
             PulsedHeadMovement(20);
             return true;
         });
+        mcp_server.AddTool("self_chassis_shake_body_start", "摇头1", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            // ESP_LOGI(TAG, "Head shake command received");
+            HeadShake_start();
+            return true;
+        });
+        mcp_server.AddTool("self_chassis_shake_body_stop", "摇头2", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            // ESP_LOGI(TAG, "Head shake command received");
+            HeadShake_stop();
+            return true;
+        });
+
     }
 
     void InitializeI2c() {
@@ -321,17 +361,8 @@ private:
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
         
-        display_ = new SpiLcdDisplay(panel_io, panel,
-                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
-                                    {
-                                        .text_font = &font_puhui_20_4,
-                                        .icon_font = &font_awesome_20_4,
-#if CONFIG_USE_WECHAT_MESSAGE_STYLE
-                                        .emoji_font = font_emoji_32_init(),
-#else
-                                        .emoji_font = font_emoji_64_init(),
-#endif
-                                    });
+        ESP_LOGI(TAG, "Panel handle: %p, Panel IO handle: %p", panel, panel_io);
+        display_ = new anim::EmojiWidget(panel, panel_io);  // Create emoji widget instead
     }
 
     void InitializeCamera() {
