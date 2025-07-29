@@ -116,14 +116,8 @@ void Protocol::SendIotStates(const std::string& states) {
 }
 
 void Protocol::SendMcpMessage(const std::string& payload) {
-    ESP_LOGI(TAG, "=== Protocol::SendMcpMessage called ===");
-    ESP_LOGI(TAG, "Raw payload received: %s", payload.c_str());
-    
     std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";
-    
-    ESP_LOGI(TAG, "Final message being sent: %s", message.c_str());
     SendText(message);
-    ESP_LOGI(TAG, "=== Protocol::SendMcpMessage complete ===");
 }
 
 bool Protocol::IsTimeout() const {

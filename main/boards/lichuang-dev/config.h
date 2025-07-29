@@ -22,7 +22,6 @@
 
 #define BUILTIN_LED_GPIO        GPIO_NUM_48
 #define BOOT_BUTTON_GPIO        GPIO_NUM_0
-#define WAKE_BUTTON_GPIO        GPIO_NUM_21
 #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
 #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
 
@@ -38,24 +37,6 @@
 #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_42
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT true
 
-// Motor control definitions
-#define MOTOR_SPEED_MAX             100
-
-#define LEDC_TIMER                  LEDC_TIMER_0
-#define LEDC_MODE                   LEDC_LOW_SPEED_MODE
-#define LEDC_DUTY_RES               LEDC_TIMER_13_BIT
-#define LEDC_FREQUENCY              (4000)
-
-// Head motor: GPIO19=PWM, GPIO20=DIR
-#define HEAD_PWM_CHANNEL            LEDC_CHANNEL_0
-#define HEAD_PWM_PIN                GPIO_NUM_19
-#define HEAD_DIR_PIN                GPIO_NUM_20
-
-// Hip motor: GPIO47=Forward PWM, GPIO48=Backward PWM  
-#define HIP_FWD_CHANNEL             LEDC_CHANNEL_1
-#define HIP_BWD_CHANNEL             LEDC_CHANNEL_2
-#define HIP_FWD_PIN                 GPIO_NUM_47
-#define HIP_BWD_PIN                 GPIO_NUM_48
 /* Camera pins */
 #define CAMERA_PIN_PWDN -1
 #define CAMERA_PIN_RESET -1

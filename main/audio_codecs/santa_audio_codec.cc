@@ -34,36 +34,6 @@ SantaAudioCodec::SantaAudioCodec(void* i2c_master_handle, int input_sample_rate,
         .addr = es7210_addr,
         .bus_handle = i2c_master_handle,
     };
-    /*
-    out_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
-    assert(out_ctrl_if_ != NULL);
-
-    gpio_if_ = audio_codec_new_gpio();
-    assert(gpio_if_ != NULL);
-
-    es8311_codec_cfg_t es8311_cfg = {};
-    es8311_cfg.ctrl_if = out_ctrl_if_;
-    es8311_cfg.gpio_if = gpio_if_;
-    es8311_cfg.codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC;
-    es8311_cfg.pa_pin = pa_pin;
-    es8311_cfg.use_mclk = true;
-    es8311_cfg.hw_gain.pa_voltage = 5.0;
-    es8311_cfg.hw_gain.codec_dac_voltage = 3.3;
-    out_codec_if_ = es8311_codec_new(&es8311_cfg);
-    assert(out_codec_if_ != NULL);
-
-    esp_codec_dev_cfg_t dev_cfg = {
-        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
-        .codec_if = out_codec_if_,
-        .data_if = data_if_,
-    };
-
-    output_dev_ = esp_codec_dev_new(&dev_cfg);
-    assert(output_dev_ != NULL);
-*/
-
-    // Input
-    //i2c_cfg.addr = es7210_addr;
     in_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
     assert(in_ctrl_if_ != NULL);
 
@@ -85,8 +55,6 @@ SantaAudioCodec::SantaAudioCodec(void* i2c_master_handle, int input_sample_rate,
 }
 
 SantaAudioCodec::~SantaAudioCodec() {
-    //ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
-    //esp_codec_dev_delete(output_dev_);
     ESP_ERROR_CHECK(esp_codec_dev_close(input_dev_));
     esp_codec_dev_delete(input_dev_);
 
@@ -183,13 +151,11 @@ void SantaAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpi
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(rx_handle_, &tdm_cfg));
-    //ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &std_cfg));  
     ESP_LOGI(TAG, "Duplex channels created");
 }
 
 
 void SantaAudioCodec::SetOutputVolume(int volume) {
-    //ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, volume));
     output_volume_ = volume;;
     AudioCodec::SetOutputVolume(volume);
 }
@@ -223,21 +189,10 @@ void SantaAudioCodec::EnableOutput(bool enable) {
         return;
     }
     if (enable) {
-        // Play 16bit 1 channel
-        /*
-        esp_codec_dev_sample_info_t fs = {
-            .bits_per_sample = 16,
-            .channel = 1,
-            .channel_mask = 0,
-            .sample_rate = (uint32_t)output_sample_rate_,
-            .mclk_multiple = 0,
-        };
-        ESP_ERROR_CHECK(esp_codec_dev_open(output_dev_, &fs));
-        ESP_ERROR_CHECK(esp_codec_dev_set_out_vol(output_dev_, output_volume_));
-        */
+        // Do Nothing
 
     } else {
-        //ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
+        // Do Nothing
         }
     AudioCodec::EnableOutput(enable);
 }
