@@ -100,7 +100,7 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-void Application::CheckNewVersion() {
+void Application::CheckNewVersion(Ota& ota) {
     const int MAX_RETRY = 10;
     int retry_count = 0;
     int retry_delay = 10; // 初始重试延迟为10秒
@@ -110,7 +110,7 @@ void Application::CheckNewVersion() {
         auto display = Board::GetInstance().GetDisplay();
         display->SetStatus(Lang::Strings::CHECKING_NEW_VERSION);
 
-        if (!ota_.CheckVersion()) {
+        if (!ota.CheckVersion()) {
             retry_count++;
             if (retry_count >= MAX_RETRY) {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
@@ -118,7 +118,7 @@ void Application::CheckNewVersion() {
             }
 
             char buffer[128];
-            snprintf(buffer, sizeof(buffer), Lang::Strings::CHECK_NEW_VERSION_FAILED, retry_delay, ota_.GetCheckVersionUrl().c_str());
+            snprintf(buffer, sizeof(buffer), Lang::Strings::CHECK_NEW_VERSION_FAILED, retry_delay, ota.GetCheckVersionUrl().c_str());
             Alert(Lang::Strings::ERROR, buffer, "sad", Lang::Sounds::P3_EXCLAMATION);
 
             ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
@@ -134,7 +134,7 @@ void Application::CheckNewVersion() {
         retry_count = 0;
         retry_delay = 10; // 重置重试延迟时间
 
-        if (ota_.HasNewVersion()) {
+        if (ota.HasNewVersion()) {
             Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::P3_UPGRADE);
 
             vTaskDelay(pdMS_TO_TICKS(3000));
@@ -142,7 +142,7 @@ void Application::CheckNewVersion() {
             SetDeviceState(kDeviceStateUpgrading);
             
             display->SetIcon(FONT_AWESOME_DOWNLOAD);
-            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota_.GetFirmwareVersion();
+            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota.GetFirmwareVersion();
             display->SetChatMessage("system", message.c_str());
 
             auto& board = Board::GetInstance();
@@ -161,7 +161,7 @@ void Application::CheckNewVersion() {
             background_task_ = nullptr;
             vTaskDelay(pdMS_TO_TICKS(1000));
 
-            ota_.StartUpgrade([display](int progress, size_t speed) {
+            ota.StartUpgrade([display](int progress, size_t speed) {
                 char buffer[64];
                 snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
                 display->SetChatMessage("system", buffer);
@@ -176,8 +176,8 @@ void Application::CheckNewVersion() {
         }
 
         // No new version, mark the current version as valid
-        ota_.MarkCurrentVersionValid();
-        if (!ota_.HasActivationCode() && !ota_.HasActivationChallenge()) {
+        ota.MarkCurrentVersionValid();
+        if (!ota.HasActivationCode() && !ota.HasActivationChallenge()) {
             xEventGroupSetBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT);
             // Exit the loop if done checking new version
             break;
@@ -185,14 +185,14 @@ void Application::CheckNewVersion() {
 
         display->SetStatus(Lang::Strings::ACTIVATION);
         // Activation code is shown to the user and waiting for the user to input
-        if (ota_.HasActivationCode()) {
-            ShowActivationCode();
+        if (ota.HasActivationCode()) {
+            ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
         }
 
         // This will block the loop until the activation is done or timeout
         for (int i = 0; i < 10; ++i) {
             ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
-            esp_err_t err = ota_.Activate();
+            esp_err_t err = ota.Activate();
             if (err == ESP_OK) {
                 xEventGroupSetBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT);
                 break;
@@ -208,10 +208,7 @@ void Application::CheckNewVersion() {
     }
 }
 
-void Application::ShowActivationCode() {
-    auto& message = ota_.GetActivationMessage();
-    auto& code = ota_.GetActivationCode();
-
+void Application::ShowActivationCode(const std::string& code, const std::string& message) {
     struct digit_sound {
         char digit;
         const std::string_view& sound;
@@ -454,7 +451,8 @@ void Application::Start() {
     display->UpdateStatusBar(true);
 
     // Check for new firmware version or get the MQTT broker address
-    CheckNewVersion();
+    Ota ota;
+    CheckNewVersion(ota);
 
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
@@ -464,9 +462,9 @@ void Application::Start() {
     McpServer::GetInstance().AddCommonTools();
 #endif
 
-    if (ota_.HasMqttConfig()) {
+    if (ota.HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
-    } else if (ota_.HasWebsocketConfig()) {
+    } else if (ota.HasWebsocketConfig()) {
         protocol_ = std::make_unique<WebsocketProtocol>();
     } else {
         ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
@@ -512,7 +510,16 @@ void Application::Start() {
         auto type = cJSON_GetObjectItem(root, "type");
         if (strcmp(type->valuestring, "tts") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
-            if (strcmp(state->valuestring, "start") == 0) {
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+    // Declare static variable outside of the if blocks so it's shared
+    static std::chrono::steady_clock::time_point tts_start_time;
+#endif
+
+    if (strcmp(state->valuestring, "start") == 0) {
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+        // Record the start time of TTS
+        tts_start_time = std::chrono::steady_clock::now();
+#endif
                 Schedule([this]() {
                     aborted_ = false;
                     if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
@@ -523,6 +530,30 @@ void Application::Start() {
                 Schedule([this]() {
                     background_task_->WaitForCompletion();
                     if (device_state_ == kDeviceStateSpeaking) {
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+            // Calculate the duration of TTS
+            auto tts_end_time = std::chrono::steady_clock::now();
+            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tts_end_time - tts_start_time).count();
+            ESP_LOGI(TAG, "TTS sequence complete: %d ms", (int)duration_ms);
+
+            if (1) {
+                ESP_LOGI(TAG, "finish TTS detected (%d ms)", (int)duration_ms);
+
+                // Schedule shake BEFORE any display update or state change
+                background_task_->Schedule([this]() {
+                    ESP_LOGI(TAG, "stop Head shake ");
+                    static int mcp_id_counter = 1000;
+                    mcp_id_counter++;
+                    char mcp_message[256];
+                    snprintf(mcp_message, sizeof(mcp_message),
+                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_stop\",\"arguments\":{}}}",
+                        mcp_id_counter);
+                    McpServer::GetInstance().ParseMessage(mcp_message);
+                    // ESP_LOGI(TAG, "Shake command sent via MCP with ID %d", mcp_id_counter);
+                });
+            }
+#endif
+
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
                         } else {
@@ -543,6 +574,30 @@ void Application::Start() {
             auto text = cJSON_GetObjectItem(root, "text");
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+        // Configure shake probability (0-100 percent)
+        static const int SHAKE_PROBABILITY = 100; // Change this value to adjust chance (0-100)
+        
+        // Generate random number between 0-99
+        int random_chance = esp_random() % 100;
+        
+        if (random_chance < SHAKE_PROBABILITY) {
+            ESP_LOGI(TAG, "User input detected, triggering body shake (chance: %d/%d)", random_chance, SHAKE_PROBABILITY);
+            background_task_->Schedule([this]() {
+                ESP_LOGI(TAG, "Trying to trigger shake...");
+                static int mcp_id_counter = 1000;
+                mcp_id_counter++;
+                char mcp_message[256];
+                snprintf(mcp_message, sizeof(mcp_message),
+                    "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_start\",\"arguments\":{}}}",
+                    mcp_id_counter);
+                McpServer::GetInstance().ParseMessage(mcp_message);
+                ESP_LOGI(TAG, "Shake command sent via MCP with ID %d", mcp_id_counter);
+            });
+        } else {
+            ESP_LOGI(TAG, "User input detected, no shake this time (chance: %d/%d)", random_chance, SHAKE_PROBABILITY);
+        }
+#endif
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
                 });
@@ -702,8 +757,9 @@ void Application::Start() {
     xEventGroupWaitBits(event_group_, CHECK_NEW_VERSION_DONE_EVENT, pdTRUE, pdFALSE, portMAX_DELAY);
     SetDeviceState(kDeviceStateIdle);
 
+    has_server_time_ = ota.HasServerTime();
     if (protocol_started) {
-        std::string message = std::string(Lang::Strings::VERSION) + ota_.GetCurrentVersion();
+        std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
         display->ShowNotification(message.c_str());
         display->SetChatMessage("system", "");
         // Play the success sound to indicate the device is ready
@@ -731,7 +787,7 @@ void Application::OnClockTimer() {
         SystemInfo::PrintHeapStats();
 
         // If we have synchronized server time, set the status to clock "HH:MM" if the device is idle
-        if (ota_.HasServerTime()) {
+        if (has_server_time_) {
             if (device_state_ == kDeviceStateIdle) {
                 Schedule([this]() {
                     // Set status to clock "HH:MM"
@@ -1107,11 +1163,26 @@ bool Application::CanEnterSleepMode() {
 }
 
 void Application::SendMcpMessage(const std::string& payload) {
-    Schedule([this, payload]() {
+    ESP_LOGI(TAG, "=== SendMcpMessage called ===");
+    ESP_LOGI(TAG, "Payload: %s", payload.c_str());
+    ESP_LOGI(TAG, "Protocol pointer: %p", (void*)protocol_.get());
+    
+    background_task_->Schedule([this, payload]() {
+        ESP_LOGI(TAG, "=== Inside SendMcpMessage background task ===");
+        ESP_LOGI(TAG, "Protocol pointer in task: %p", (void*)protocol_.get());
+        
         if (protocol_) {
+            ESP_LOGI(TAG, "Protocol exists, calling SendMcpMessage...");
             protocol_->SendMcpMessage(payload);
+            ESP_LOGI(TAG, "Protocol SendMcpMessage completed");
+        } else {
+            ESP_LOGE(TAG, "ERROR: protocol_ is null! Cannot send MCP message");
         }
+        
+        ESP_LOGI(TAG, "=== SendMcpMessage background task complete ===");
     });
+    
+    ESP_LOGI(TAG, "=== SendMcpMessage scheduled ===");
 }
 
 void Application::SetAecMode(AecMode mode) {
