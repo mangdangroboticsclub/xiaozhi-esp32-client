@@ -3,9 +3,9 @@ set(SOURCES "audio_codecs/audio_codec.cc"
             "audio_codecs/box_audio_codec.cc"
             "audio_codecs/es8311_audio_codec.cc"
             "audio_codecs/es8374_audio_codec.cc"
+            "audio_codecs/santa_audio_codec.cc"
             "audio_codecs/es8388_audio_codec.cc"
             "audio_processing/audio_debugger.cc"
-	    "audio_codecs/santa_audio_codec.cc"
             "led/single_led.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
@@ -72,8 +72,6 @@ elseif(CONFIG_BOARD_TYPE_LICHUANG_DEV)
     set(BOARD_TYPE "lichuang-dev")
 elseif(CONFIG_BOARD_TYPE_LICHUANG_C3_DEV)
     set(BOARD_TYPE "lichuang-c3-dev")
-elseif(CONFIG_BOARD_TYPE_HEYSANTA)
-    set(BOARD_TYPE "heysanta")
 elseif(CONFIG_BOARD_TYPE_MAGICLICK_2P4)
     set(BOARD_TYPE "magiclick-2p4")
 elseif(CONFIG_BOARD_TYPE_MAGICLICK_2P5)
@@ -128,6 +126,8 @@ elseif(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI_LCD)
     set(BOARD_TYPE "bread-compact-wifi-lcd")
 elseif(CONFIG_BOARD_TYPE_TUDOUZI)
     set(BOARD_TYPE "tudouzi")
+elseif(CONFIG_BOARD_TYPE_TURTLEBOT)
+    set(BOARD_TYPE "TurtleBot")
 elseif(CONFIG_BOARD_TYPE_LILYGO_T_CIRCLE_S3)
     set(BOARD_TYPE "lilygo-t-circle-s3")
 elseif(CONFIG_BOARD_TYPE_LILYGO_T_CAMERAPLUS_S3_V1_0_V1_1)
@@ -176,6 +176,8 @@ elseif(CONFIG_BOARD_TYPE_MIXGO_NOVA)
     set(BOARD_TYPE "mixgo-nova")
 elseif(CONFIG_BOARD_TYPE_GENJUTECH_S3_1_54TFT)
     set(BOARD_TYPE "genjutech-s3-1.54tft")
+elseif(CONFIG_BOARD_TYPE_HEYSANTA)
+    set(BOARD_TYPE "HeySanta")
 elseif(CONFIG_BOARD_TYPE_ESP32_CGC)
     set(BOARD_TYPE "esp32-cgc")
 elseif(CONFIG_BOARD_TYPE_ESP32_CGC_144)
@@ -309,6 +311,17 @@ foreach(FILENAME IN LISTS FILES_TO_DOWNLOAD)
         endif()
     endif()
 endforeach()
+endif()
+
+if(CONFIG_BOARD_TYPE_HEYSANTA)
+set(URL "https://github.com/espressif2022/image_player/raw/main/test_apps/test_8bit")
+set(SPIFFS_DIR "${CMAKE_BINARY_DIR}/emoji")
+file(MAKE_DIRECTORY ${SPIFFS_DIR})
+set(FILES_TO_DOWNLOAD "")
+list(APPEND FILES_TO_DOWNLOAD "heart.aaf" "bell.aaf" "star.aaf")
+file(COPY "C:/Espressif/frameworks/esp-idf-v5.4.1/FIG/emoji/heart.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "C:/Espressif/frameworks/esp-idf-v5.4.1/FIG/emoji/bell.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "C:/Espressif/frameworks/esp-idf-v5.4.1/FIG/emoji/star.aaf" DESTINATION "${SPIFFS_DIR}")
 
 spiffs_create_partition_assets(
     assets_A
