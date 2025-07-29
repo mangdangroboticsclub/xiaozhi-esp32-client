@@ -48,14 +48,14 @@
 
 // Head motor: GPIO19=PWM, GPIO20=DIR
 #define HEAD_PWM_CHANNEL            LEDC_CHANNEL_0
-#define HEAD_PWM_PIN                GPIO_NUM_47
-#define HEAD_DIR_PIN                GPIO_NUM_48
+#define HEAD_PWM_PIN                GPIO_NUM_19
+#define HEAD_DIR_PIN                GPIO_NUM_20
 
 // Hip motor: GPIO47=Forward PWM, GPIO48=Backward PWM  
 #define HIP_FWD_CHANNEL             LEDC_CHANNEL_1
 #define HIP_BWD_CHANNEL             LEDC_CHANNEL_2
-#define HIP_FWD_PIN                 GPIO_NUM_19
-#define HIP_BWD_PIN                 GPIO_NUM_20
+#define HIP_FWD_PIN                 GPIO_NUM_47
+#define HIP_BWD_PIN                 GPIO_NUM_48
 /* Camera pins */
 #define CAMERA_PIN_PWDN -1
 #define CAMERA_PIN_RESET -1
