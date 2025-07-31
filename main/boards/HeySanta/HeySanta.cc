@@ -164,10 +164,11 @@ private:
         for (int i = 0; i < 50; i++) {
             SetHeadSpeed(100);   // Full speed forward
             vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-            
+           
             SetHeadSpeed(-100);  // Full speed backward
             vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-        }
+            
+            }
         SetHeadSpeed(0);
         ESP_LOGI(TAG, "Head shake complete!");
     }
@@ -179,7 +180,8 @@ private:
             
             SetHeadSpeed(-100);  // Full speed backward
             vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-        }
+            
+            }
         // ESP_LOGI(TAG, "Head shake complete!");
     }
     void HeadShake_stop() {
@@ -197,6 +199,7 @@ private:
 
     void HipShakeOnly() {
         ESP_LOGI(TAG, "Hip shake (on/off mode)!");
+        SetHeadSpeed(0);
         
         for (int i = 0; i < 12; i++) {
             SetHipSpeed(100);    // Forward
