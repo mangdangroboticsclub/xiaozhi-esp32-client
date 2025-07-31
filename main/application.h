@@ -86,6 +86,9 @@ public:
 private:
     Application();
     ~Application();
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+    bool tts_can_start_ = true;
+#endif
 
     std::unique_ptr<WakeWord> wake_word_;
     std::unique_ptr<AudioProcessor> audio_processor_;

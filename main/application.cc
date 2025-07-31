@@ -54,6 +54,10 @@ Application::Application() {
     event_group_ = xEventGroupCreate();
     background_task_ = new BackgroundTask(4096 * 7);
 
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+    tts_can_start_ = true;
+#endif
+
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
 #elif CONFIG_USE_SERVER_AEC
@@ -478,7 +482,14 @@ void Application::Start() {
     protocol_->OnIncomingAudio([this](AudioStreamPacket&& packet) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (device_state_ == kDeviceStateSpeaking && audio_decode_queue_.size() < MAX_AUDIO_PACKETS_IN_QUEUE) {
+    #ifdef CONFIG_BOARD_TYPE_HEYSANTA
+            if (tts_can_start_) {
+                audio_decode_queue_.emplace_back(std::move(packet));
+            }
+            // Drop TTS packets while hohoho is playing
+    #else
             audio_decode_queue_.emplace_back(std::move(packet));
+    #endif
         }
     });
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
@@ -517,15 +528,45 @@ void Application::Start() {
 
     if (strcmp(state->valuestring, "start") == 0) {
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-        // Record the start time of TTS
-        tts_start_time = std::chrono::steady_clock::now();
-#endif
-                Schedule([this]() {
-                    aborted_ = false;
-                    if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
-                        SetDeviceState(kDeviceStateSpeaking);
-                    }
+    Schedule([this]() {
+        aborted_ = false;
+        if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+            ResetDecoder();
+            SetDeviceState(kDeviceStateSpeaking);
+            
+            // 50% chance to play hohoho
+            static const int HOHOHO_PROBABILITY = 50; // Change this value (0-100)
+            int random_chance = esp_random() % 100;
+            
+            if (random_chance < HOHOHO_PROBABILITY) {
+                ESP_LOGI(TAG, "Playing hohoho before TTS (chance: %d/%d)", random_chance, HOHOHO_PROBABILITY);
+                
+                // Block TTS temporarily
+                tts_can_start_ = false;
+                
+                // Play hohoho first
+                PlaySound(Lang::Sounds::P3_HOHOHO);
+                
+                // Schedule to allow TTS after hohoho finishes
+                background_task_->Schedule([this]() {
+                    vTaskDelay(pdMS_TO_TICKS(1500)); // Adjust timing as needed
+                    tts_can_start_ = true;
                 });
+            } else {
+                ESP_LOGI(TAG, "Skipping hohoho this time (chance: %d/%d)", random_chance, HOHOHO_PROBABILITY);
+                // No hohoho, allow TTS immediately
+                tts_can_start_ = true;
+            }
+        }
+    });
+#else
+    Schedule([this]() {
+        aborted_ = false;
+        if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+            SetDeviceState(kDeviceStateSpeaking);
+        }
+    });
+#endif
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     background_task_->WaitForCompletion();
@@ -662,6 +703,19 @@ void Application::Start() {
             std::lock_guard<std::mutex> lock(mutex_);
             if (audio_send_queue_.size() >= MAX_AUDIO_PACKETS_IN_QUEUE) {
                 ESP_LOGW(TAG, "Too many audio packets in queue, drop the newest packet");
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
+                audio_send_queue_.pop_back(); // Drop the oldest packet
                 return;
             }
         }

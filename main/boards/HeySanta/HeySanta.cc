@@ -28,6 +28,7 @@
 // Remove LEDC includes - not needed for simple on/off control
 
 #define TAG "HeySanta"
+static volatile bool hip_motor_running = false;
 
 LV_FONT_DECLARE(font_puhui_20_4);
 LV_FONT_DECLARE(font_awesome_20_4);
@@ -128,33 +129,39 @@ private:
     void SparkBotDance() {
         ESP_LOGI(TAG, "Starting simple on/off dance!");
         
-        for (int cnt = 0; cnt < 5; cnt++) {
-            // Head shake sequence - much faster
-            for (int i = 0; i < 10; i++) {
-                SetHeadSpeed(100);  // Full speed forward
-                vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced from 500ms to 100ms
-                SetHeadSpeed(-100); // Full speed backward
-                vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced from 500ms to 100ms
+        // Set flag to prevent head movement during dance
+        hip_motor_running = true;
+        
+        for (int cnt = 0; cnt < 3; cnt++) {  // Reduced from 5 to 3 cycles
+            // Head shake sequence - shorter
+            for (int i = 0; i < 6; i++) {  // Reduced from 10 to 6
+                SetHeadSpeed(100);
+                vTaskDelay(80 / portTICK_PERIOD_MS);  // Faster
+                SetHeadSpeed(-100);
+                vTaskDelay(80 / portTICK_PERIOD_MS);  // Faster
             }
-            SetHeadSpeed(0);  // Stop head
+            SetHeadSpeed(0);
             
-            // Hip shake sequence - gentler with stops
-            for (int i = 0; i < 8; i++) {
-                SetHipSpeed(100);   // Forward
-                vTaskDelay(150 / portTICK_PERIOD_MS);  // Reduced from 250ms to 150ms
-                SetHipSpeed(0);     // Stop
-                vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief stop
-                SetHipSpeed(-100);  // Backward
-                vTaskDelay(150 / portTICK_PERIOD_MS);  // Reduced from 250ms to 150ms
-                SetHipSpeed(0);     // Stop
-                vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief stop
+            // Hip shake sequence - shorter
+            for (int i = 0; i < 5; i++) {  // Reduced from 8 to 5
+                SetHipSpeed(100);
+                vTaskDelay(120 / portTICK_PERIOD_MS);  // Faster
+                SetHipSpeed(0);
+                vTaskDelay(40 / portTICK_PERIOD_MS);   // Faster
+                SetHipSpeed(-100);
+                vTaskDelay(120 / portTICK_PERIOD_MS);  // Faster
+                SetHipSpeed(0);
+                vTaskDelay(40 / portTICK_PERIOD_MS);   // Faster
             }
-            SetHipSpeed(0);  // Stop hip
+            SetHipSpeed(0);
             
-            vTaskDelay(200 / portTICK_PERIOD_MS);  // Much shorter pause between cycles (was 300ms)
+            vTaskDelay(150 / portTICK_PERIOD_MS);  // Shorter pause
         }
         
         StopAllMotors();
+        
+        // Clear flag when done
+        hip_motor_running = false;
         ESP_LOGI(TAG, "Dance complete!");
     }
 
@@ -172,46 +179,59 @@ private:
         ESP_LOGI(TAG, "Head shake complete!");
     }
     void HeadShake_start() {
-        ESP_LOGI(TAG, "start ");
-        for (int i = 0; i < 2; i++) {
-            SetHeadSpeed(100);   // Full speed forward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-            
-            SetHeadSpeed(-100);  // Full speed backward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+        // Don't move head if hip is active
+        if (hip_motor_running) {
+            ESP_LOGI(TAG, "Hip motor active - skipping head shake to avoid conflict");
+            return;
         }
-        // ESP_LOGI(TAG, "Head shake complete!");
+        
+        ESP_LOGI(TAG, "Head shake start");
+        for (int i = 0; i < 2; i++) {
+            SetHeadSpeed(100);
+            vTaskDelay(80 / portTICK_PERIOD_MS);
+            SetHeadSpeed(-100);
+            vTaskDelay(80 / portTICK_PERIOD_MS);
+        }
     }
     void HeadShake_stop() {
-        ESP_LOGI(TAG, "stop Head shake (on/off mode)!");
+        // Don't move head if hip is active
+        if (hip_motor_running) {
+            ESP_LOGI(TAG, "Hip motor active - skipping head shake to avoid conflict");
+            return;
+        }
+        
+        ESP_LOGI(TAG, "Head shake stop");
         for (int i = 0; i < 1; i++) {
-            SetHeadSpeed(100);   // Full speed forward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-            
-            SetHeadSpeed(-100);  // Full speed backward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            SetHeadSpeed(100);
+            vTaskDelay(80 / portTICK_PERIOD_MS);
+            SetHeadSpeed(-100);
+            vTaskDelay(80 / portTICK_PERIOD_MS);
         }
         SetHeadSpeed(0);
-        // ESP_LOGI(TAG, "Head shake complete!");
     }
 
     void HipShakeOnly() {
         ESP_LOGI(TAG, "Hip shake (on/off mode)!");
         
+        // Set flag to prevent head movement
+        hip_motor_running = true;
+        
         for (int i = 0; i < 12; i++) {
             SetHipSpeed(100);    // Forward
-            vTaskDelay(150 / portTICK_PERIOD_MS);  // Faster (was 200ms)
-            SetHipSpeed(0);      // Stop - adds gentleness
-            vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief pause
+            vTaskDelay(150 / portTICK_PERIOD_MS);
+            SetHipSpeed(0);      // Stop
+            vTaskDelay(50 / portTICK_PERIOD_MS);
             SetHipSpeed(-100);   // Backward
-            vTaskDelay(150 / portTICK_PERIOD_MS);  // Faster (was 200ms)
-            SetHipSpeed(0);      // Stop - adds gentleness
-            vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief pause
+            vTaskDelay(150 / portTICK_PERIOD_MS);
+            SetHipSpeed(0);      // Stop
+            vTaskDelay(50 / portTICK_PERIOD_MS);
         }
         SetHipSpeed(0);
+        
+        // Clear flag when done
+        hip_motor_running = false;
         ESP_LOGI(TAG, "Hip shake complete!");
     }
-
     // Optional: Create pulsed movement for more dynamic control
     void PulsedHeadMovement(int cycles) {
         ESP_LOGI(TAG, "Pulsed head movement!");

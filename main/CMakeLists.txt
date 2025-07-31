@@ -318,10 +318,13 @@ set(URL "https://github.com/espressif2022/image_player/raw/main/test_apps/test_8
 set(SPIFFS_DIR "${CMAKE_BINARY_DIR}/emoji")
 file(MAKE_DIRECTORY ${SPIFFS_DIR})
 set(FILES_TO_DOWNLOAD "")
-list(APPEND FILES_TO_DOWNLOAD "heart.aaf" "bell.aaf" "star.aaf")
+list(APPEND FILES_TO_DOWNLOAD "heart.aaf" "bell.aaf" "star.aaf" "cookie.aaf" "cookie2.aaf" "cookie5.aaf")
 file(COPY "${CMAKE_SOURCE_DIR}/emoji/heart.aaf" DESTINATION "${SPIFFS_DIR}")
 file(COPY "${CMAKE_SOURCE_DIR}/emoji/bell.aaf" DESTINATION "${SPIFFS_DIR}")
 file(COPY "${CMAKE_SOURCE_DIR}/emoji/star.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/cookie.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/cookie5.aaf" DESTINATION "${SPIFFS_DIR}")
+
 
 
 spiffs_create_partition_assets(
