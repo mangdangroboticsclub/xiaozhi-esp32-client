@@ -764,7 +764,11 @@ void Application::Start() {
         display->SetChatMessage("system", "");
         // Play the success sound to indicate the device is ready
         ResetDecoder();
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+        PlaySound(Lang::Sounds::P3_HO);
+#else
         PlaySound(Lang::Sounds::P3_SUCCESS);
+#endif
     }
 
     // Print heap stats
