@@ -32,6 +32,10 @@
 LV_FONT_DECLARE(font_puhui_20_4);
 LV_FONT_DECLARE(font_awesome_20_4);
 
+float m1_coefficient = 1.0;
+float m2_coefficient = 1.0;
+
+
 class HeySantaCodec : public SantaAudioCodec  {
 private:    
 
@@ -57,70 +61,84 @@ private:
     Esp32Camera* camera_;
     
     
-    // Simple on/off motor initialization - NO PWM/LEDC
-    void InitializeMotors() {
-        ESP_LOGI(TAG, "Initializing motors (simple on/off mode)...");
-        
-        // Configure all motor pins as simple digital outputs
-        gpio_config_t gpio_conf = {
-            .pin_bit_mask = (1ULL << HEAD_PWM_PIN) | (1ULL << HEAD_DIR_PIN) | 
-                           (1ULL << HIP_FWD_PIN) | (1ULL << HIP_BWD_PIN),
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_ENABLE,  // Pull down for safety
-            .intr_type = GPIO_INTR_DISABLE
+    void Initialize_Motor(void)
+    {
+        // Prepare and then apply the LEDC PWM timer configuration
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode       = LEDC_MODE,
+            .duty_resolution  = LEDC_DUTY_RES,
+            .timer_num        = LEDC_TIMER,
+
+            .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 4 kHz
+            .clk_cfg          = LEDC_AUTO_CLK
         };
-        ESP_ERROR_CHECK(gpio_config(&gpio_conf));
-        
-        StopAllMotors();
-        ESP_LOGI(TAG, "Motors initialized successfully (digital on/off mode)");
+        ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+        // Array of channel configurations for easy iteration
+        const uint8_t motor_ledc_channel[LEDC_CHANNEL_COUNT] = {LEDC_M1_CHANNEL_A, LEDC_M1_CHANNEL_B, LEDC_M2_CHANNEL_A, LEDC_M2_CHANNEL_B};
+        const int32_t ledc_channel_pins[LEDC_CHANNEL_COUNT] = {LEDC_M1_CHANNEL_A_IO, LEDC_M1_CHANNEL_B_IO, LEDC_M2_CHANNEL_A_IO, LEDC_M2_CHANNEL_B_IO};
+        for (int i = 0; i < LEDC_CHANNEL_COUNT; i++) {
+            ledc_channel_config_t ledc_channel = {
+                .gpio_num       = ledc_channel_pins[i],
+                .speed_mode     = LEDC_MODE,
+                
+                .channel        = (ledc_channel_t)motor_ledc_channel[i], // Assuming channel values increment for each new channel
+                .intr_type      = LEDC_INTR_DISABLE,
+                .timer_sel      = LEDC_TIMER,
+
+
+                .duty           = 0, // Set duty to 0%
+                .hpoint         = 0
+            };
+            ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+        }
     }
 
-    // Simple stop - just set all pins LOW
-    void StopAllMotors() {
-        gpio_set_level(HEAD_PWM_PIN, 0);   // Head motor OFF
-        gpio_set_level(HEAD_DIR_PIN, 0);   // Head direction LOW
-        gpio_set_level(HIP_FWD_PIN, 0);    // Hip forward OFF
-        gpio_set_level(HIP_BWD_PIN, 0);    // Hip backward OFF
-        ESP_LOGI(TAG, "All motors STOPPED");
+    static void set_motor_A_speed(int speed)
+    {
+        if (speed >= 0) {
+            uint32_t m1a_duty = (uint32_t)((speed * m1_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_A, m1a_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_B, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_B));
+        } else {
+            uint32_t m1b_duty = (uint32_t)((-speed * m1_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_A, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_B, m1b_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_B));
+        }
     }
+
+    static void set_motor_B_speed(int speed)
+    {
+        if (speed >= 0) {
+            uint32_t m2a_duty = (uint32_t)((speed * m2_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_A, m2a_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_B, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_B));
+        } else {
+            uint32_t m2b_duty = (uint32_t)((-speed * m2_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_A, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_B, m2b_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_B));
+        }
+    }
+
 
     // Simple on/off head control - NO PWM
     void SetHeadSpeed(int speed) {
         ESP_LOGI(TAG, "Setting head speed to %d (on/off mode)", speed);
-        
-        if (speed > 0) {
-            // Forward: PWM=ON, DIR=HIGH
-            gpio_set_level(HEAD_PWM_PIN, 1);  // GPIO 19 - full on
-            gpio_set_level(HEAD_DIR_PIN, 1);  // GPIO 20 - forward
-        } else if (speed < 0) {
-            // Backward: PWM=ON, DIR=LOW  
-            gpio_set_level(HEAD_PWM_PIN, 1);  // GPIO 19 - full on
-            gpio_set_level(HEAD_DIR_PIN, 0);  // GPIO 20 - backward
-        } else {
-            // Stop: PWM=OFF
-            gpio_set_level(HEAD_PWM_PIN, 0);  // GPIO 19 - off
-            gpio_set_level(HEAD_DIR_PIN, 0);  // GPIO 20 - off
-        }
+        set_motor_A_speed(speed);
     }
 
     // Simple on/off hip control - NO PWM
     void SetHipSpeed(int speed) {
         ESP_LOGI(TAG, "Setting hip speed to %d (on/off mode)", speed);
-        
-        if (speed > 0) {
-            // Forward: FWD=ON, BWD=OFF
-            gpio_set_level(HIP_FWD_PIN, 1);   // GPIO 47 - forward on
-            gpio_set_level(HIP_BWD_PIN, 0);   // GPIO 48 - backward off
-        } else if (speed < 0) {
-            // Backward: FWD=OFF, BWD=ON
-            gpio_set_level(HIP_FWD_PIN, 0);   // GPIO 47 - forward off
-            gpio_set_level(HIP_BWD_PIN, 1);   // GPIO 48 - backward on
-        } else {
-            // Stop: both OFF
-            gpio_set_level(HIP_FWD_PIN, 0);   // GPIO 47 - off
-            gpio_set_level(HIP_BWD_PIN, 0);   // GPIO 48 - off
-        }
+        set_motor_B_speed(speed);    
     }
 
     // Improved dance with on/off control
@@ -153,8 +171,6 @@ private:
             
             vTaskDelay(200 / portTICK_PERIOD_MS);  // Much shorter pause between cycles (was 300ms)
         }
-        
-        StopAllMotors();
         ESP_LOGI(TAG, "Dance complete!");
     }
 
@@ -399,34 +415,12 @@ private:
 
 public:
     HeySantaBoard() : boot_button_(BOOT_BUTTON_GPIO), wake_button_(WAKE_BUTTON_GPIO) {
-        // IMMEDIATELY set all motor pins to safe state
-        gpio_reset_pin(GPIO_NUM_47);
-        gpio_reset_pin(GPIO_NUM_48); 
-        gpio_reset_pin(GPIO_NUM_19);
-        gpio_reset_pin(GPIO_NUM_20);
-        
-        gpio_set_direction(GPIO_NUM_47, GPIO_MODE_OUTPUT);
-        gpio_set_direction(GPIO_NUM_48, GPIO_MODE_OUTPUT);
-        gpio_set_direction(GPIO_NUM_19, GPIO_MODE_OUTPUT);
-        gpio_set_direction(GPIO_NUM_20, GPIO_MODE_OUTPUT);
-        
-        gpio_set_level(GPIO_NUM_47, 0);
-        gpio_set_level(GPIO_NUM_48, 0);
-        gpio_set_level(GPIO_NUM_19, 0);
-        gpio_set_level(GPIO_NUM_20, 0);
-        
-        ESP_LOGI(TAG, "EMERGENCY: All motor pins forced to LOW");
-        
-        // Small delay for hardware to settle
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-        
-        // Then continue with normal initialization...
         InitializeI2c();
         InitializeSpi();
         InitializeSt7789Display();
         InitializeButtons();
         InitializeCamera();
-        InitializeMotors();  // Much simpler now - no PWM/LEDC!
+        Initialize_Motor();
         InitializeTools();
 
 #if CONFIG_IOT_PROTOCOL_XIAOZHI
