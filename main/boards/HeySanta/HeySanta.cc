@@ -25,12 +25,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "emoji_display.h"
-// Remove LEDC includes - not needed for simple on/off control
+// Add these new includes for web server
+
 
 #define TAG "HeySanta"
 
 LV_FONT_DECLARE(font_puhui_20_4);
 LV_FONT_DECLARE(font_awesome_20_4);
+
+float m1_coefficient = 1.0;
+float m2_coefficient = 1.0;
+
+
 
 class HeySantaCodec : public SantaAudioCodec  {
 private:    
@@ -52,186 +58,223 @@ private:
     i2c_master_dev_handle_t pca9557_handle_;
     Button boot_button_;
     Button wake_button_;
-    // LcdDisplay* display_;
     anim::EmojiWidget* display_ = nullptr;
     Esp32Camera* camera_;
     
-    
-    // Simple on/off motor initialization - NO PWM/LEDC
-    void InitializeMotors() {
-        ESP_LOGI(TAG, "Initializing motors (simple on/off mode)...");
-        
-        // Configure all motor pins as simple digital outputs
-        gpio_config_t gpio_conf = {
-            .pin_bit_mask = (1ULL << HEAD_PWM_PIN) | (1ULL << HEAD_DIR_PIN) | 
-                           (1ULL << HIP_FWD_PIN) | (1ULL << HIP_BWD_PIN),
-            .mode = GPIO_MODE_OUTPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_ENABLE,  // Pull down for safety
-            .intr_type = GPIO_INTR_DISABLE
+    void Initialize_Motor(void)
+    {
+        // Prepare and then apply the LEDC PWM timer configuration
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode       = LEDC_MODE,
+            .duty_resolution  = LEDC_DUTY_RES,
+            .timer_num        = LEDC_TIMER,
+            .freq_hz          = LEDC_FREQUENCY,  // Set output frequency at 4 kHz
+            .clk_cfg          = LEDC_AUTO_CLK
         };
-        ESP_ERROR_CHECK(gpio_config(&gpio_conf));
+        ESP_ERROR_CHECK(ledc_timer_config(&ledc_timer));
+
+        // Array of channel configurations for easy iteration
+        const uint8_t motor_ledc_channel[LEDC_CHANNEL_COUNT] = {LEDC_M1_CHANNEL_A, LEDC_M1_CHANNEL_B, LEDC_M2_CHANNEL_A, LEDC_M2_CHANNEL_B};
+        const int32_t ledc_channel_pins[LEDC_CHANNEL_COUNT] = {LEDC_M1_CHANNEL_A_IO, LEDC_M1_CHANNEL_B_IO, LEDC_M2_CHANNEL_A_IO, LEDC_M2_CHANNEL_B_IO};
+        for (int i = 0; i < LEDC_CHANNEL_COUNT; i++) {
+            ledc_channel_config_t ledc_channel = {
+                .gpio_num       = ledc_channel_pins[i],
+                .speed_mode     = LEDC_MODE,
+                .channel        = (ledc_channel_t)motor_ledc_channel[i],
+                .intr_type      = LEDC_INTR_DISABLE,
+                .timer_sel      = LEDC_TIMER,
+                .duty           = 0, // Set duty to 0%
+                .hpoint         = 0
+            };
+            ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
+        }
         
-        StopAllMotors();
-        ESP_LOGI(TAG, "Motors initialized successfully (digital on/off mode)");
+    
     }
 
-    // Simple stop - just set all pins LOW
-    void StopAllMotors() {
-        gpio_set_level(HEAD_PWM_PIN, 0);   // Head motor OFF
-        gpio_set_level(HEAD_DIR_PIN, 0);   // Head direction LOW
-        gpio_set_level(HIP_FWD_PIN, 0);    // Hip forward OFF
-        gpio_set_level(HIP_BWD_PIN, 0);    // Hip backward OFF
-        ESP_LOGI(TAG, "All motors STOPPED");
+    static void set_motor_A_speed(int speed)
+    {
+        if (speed >= 0) {
+            uint32_t m1a_duty = (uint32_t)((speed * m1_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_A, m1a_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_B, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_B));
+        } else {
+            uint32_t m1b_duty = (uint32_t)((-speed * m1_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_A, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M1_CHANNEL_B, m1b_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M1_CHANNEL_B));
+        }
     }
 
-    // Simple on/off head control - NO PWM
+    static void set_motor_B_speed(int speed)
+    {
+        if (speed >= 0) {
+            uint32_t m2a_duty = (uint32_t)((speed * m2_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_A, m2a_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_B, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_B));
+        } else {
+            uint32_t m2b_duty = (uint32_t)((-speed * m2_coefficient * 8192) / 100);
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_A, 0));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_A));
+            ESP_ERROR_CHECK(ledc_set_duty(LEDC_MODE, LEDC_M2_CHANNEL_B, m2b_duty));
+            ESP_ERROR_CHECK(ledc_update_duty(LEDC_MODE, LEDC_M2_CHANNEL_B));
+        }
+    }
+    void movement_type(int motor, uint32_t mode, int dir) 
+    //motor: 1 for head, 2 for hip 
+    //mode: 0 for slow, 1 for mid, 2 for stop 
+    //dir: 1 for forward, -1 for backward
+    {
+        int speed_head[3] = {87, 93, 100}; 
+        int speed_hip[3] = {90, 95, 100};
+        int speed;
+        if (motor == 1)  
+        {
+            if (dir == 1) speed = speed_head[mode];
+            else speed = -speed_head[mode];
+            ESP_LOGI(TAG, "Setting head speed to %d", speed);
+            set_motor_A_speed(speed);
+        }
+        else 
+        {
+            if (dir == 1) speed = speed_hip[mode];
+            else speed = -speed_hip[mode];
+            ESP_LOGI(TAG, "Setting hip speed to %d", speed);
+            if (speed < 0) {
+                speed = abs(speed);
+                int step = speed / 4;
+                for (int i = 1 ; i <= 4 ; i++)
+                {
+                    set_motor_B_speed(speed); // Gradually increase speed to avoid sudden jerk
+                    speed -= step; 
+                    vTaskDelay(25 / portTICK_PERIOD_MS); // Wait for 0.1 second    
+                }
+                set_motor_B_speed(0); // Set final speed
+            }
+            else 
+            {
+                set_motor_B_speed(speed);
+            }
+        }
+    }
+
     void SetHeadSpeed(int speed) {
-        ESP_LOGI(TAG, "Setting head speed to %d (on/off mode)", speed);
-        
-        if (speed > 0) {
-            // Forward: PWM=ON, DIR=HIGH
-            gpio_set_level(HEAD_PWM_PIN, 1);  // GPIO 19 - full on
-            gpio_set_level(HEAD_DIR_PIN, 1);  // GPIO 20 - forward
-        } else if (speed < 0) {
-            // Backward: PWM=ON, DIR=LOW  
-            gpio_set_level(HEAD_PWM_PIN, 1);  // GPIO 19 - full on
-            gpio_set_level(HEAD_DIR_PIN, 0);  // GPIO 20 - backward
-        } else {
-            // Stop: PWM=OFF
-            gpio_set_level(HEAD_PWM_PIN, 0);  // GPIO 19 - off
-            gpio_set_level(HEAD_DIR_PIN, 0);  // GPIO 20 - off
-        }
+        ESP_LOGI(TAG, "Setting head speed to %d", speed);
+        set_motor_A_speed(speed);
     }
 
-    // Simple on/off hip control - NO PWM
     void SetHipSpeed(int speed) {
-        ESP_LOGI(TAG, "Setting hip speed to %d (on/off mode)", speed);
-        
-        if (speed > 0) {
-            // Forward: FWD=ON, BWD=OFF
-            gpio_set_level(HIP_FWD_PIN, 1);   // GPIO 47 - forward on
-            gpio_set_level(HIP_BWD_PIN, 0);   // GPIO 48 - backward off
-        } else if (speed < 0) {
-            // Backward: FWD=OFF, BWD=ON
-            gpio_set_level(HIP_FWD_PIN, 0);   // GPIO 47 - forward off
-            gpio_set_level(HIP_BWD_PIN, 1);   // GPIO 48 - backward on
-        } else {
-            // Stop: both OFF
-            gpio_set_level(HIP_FWD_PIN, 0);   // GPIO 47 - off
-            gpio_set_level(HIP_BWD_PIN, 0);   // GPIO 48 - off
-        }
+        ESP_LOGI(TAG, "Setting hip speed to %d", speed);
+        set_motor_B_speed(speed);    
     }
 
-    // Improved dance with on/off control
-    // Improved dance with faster timing
-    void SparkBotDance() {
-        ESP_LOGI(TAG, "Starting simple on/off dance!");
-        
-        for (int cnt = 0; cnt < 5; cnt++) {
-            // Head shake sequence - much faster
-            for (int i = 0; i < 10; i++) {
-                SetHeadSpeed(100);  // Full speed forward
-                vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced from 500ms to 100ms
-                SetHeadSpeed(-100); // Full speed backward
-                vTaskDelay(100 / portTICK_PERIOD_MS);  // Reduced from 500ms to 100ms
-            }
-            SetHeadSpeed(0);  // Stop head
-            
-            // Hip shake sequence - gentler with stops
-            for (int i = 0; i < 8; i++) {
-                SetHipSpeed(100);   // Forward
-                vTaskDelay(150 / portTICK_PERIOD_MS);  // Reduced from 250ms to 150ms
-                SetHipSpeed(0);     // Stop
-                vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief stop
-                SetHipSpeed(-100);  // Backward
-                vTaskDelay(150 / portTICK_PERIOD_MS);  // Reduced from 250ms to 150ms
-                SetHipSpeed(0);     // Stop
-                vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief stop
-            }
-            SetHipSpeed(0);  // Stop hip
-            
-            vTaskDelay(200 / portTICK_PERIOD_MS);  // Much shorter pause between cycles (was 300ms)
-        }
-        
-        StopAllMotors();
-        ESP_LOGI(TAG, "Dance complete!");
+    uint32_t unbiasedRandom3() {
+    uint32_t r;
+    const uint32_t upper_bound = 0xFFFFFFFF - (0xFFFFFFFF % 3);
+    
+    do {
+        r = esp_random();
+    } while (r >= upper_bound);
+    
+    return r % 3;
     }
+
+    uint32_t unbiasedRandomRange(int min, int max) {
+        // Calculate the range size
+        uint32_t range = max - min + 1;
+        
+        // Determine the upper bound to reject values that cause bias
+        uint32_t upper_bound = 0xFFFFFFFF - (0xFFFFFFFF % range);
+        uint32_t r;
+        
+        do {
+            r = esp_random(); // Get 32-bit random number from hardware
+        } while (r >= upper_bound);
+        
+        return min + (r % range);
+    }
+    void dance()
+    {
+        for (int i = 1 ; i <= 3; i++) // dance for 3 times
+        {
+            uint32_t head_mode = unbiasedRandom3(); // Randomly choose head mode 
+            uint32_t hip_mode = unbiasedRandom3(); // Randomly choose hip mode
+            movement_type(1, head_mode, 1); // Head forward
+            vTaskDelay(unbiasedRandomRange(1500, 5000) / portTICK_PERIOD_MS); // Wait for 5 second
+            set_motor_A_speed(0); 
+            vTaskDelay(unbiasedRandomRange(150, 1000) / portTICK_PERIOD_MS); // Wait for 1 second
+            for (int j = 0; j < 3; j++) // Shake head 3 times
+            {
+                movement_type(2, hip_mode, 1); // Hip forward
+                vTaskDelay(150 / portTICK_PERIOD_MS); // Wait for 0.5 second
+
+                movement_type(2, hip_mode, -1); // Hip forward
+                vTaskDelay(150 / portTICK_PERIOD_MS); // Wait for 0.5 second
+            }
+            set_motor_B_speed(0);
+        }
+
+    }
+
+
 
     void HeadShakeOnly() {
         ESP_LOGI(TAG, "Head shake (on/off mode)!");
         
         for (int i = 0; i < 50; i++) {
             SetHeadSpeed(100);   // Full speed forward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-           
-            SetHeadSpeed(-100);  // Full speed backward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            vTaskDelay(80 / portTICK_PERIOD_MS);
             
-            }
+            SetHeadSpeed(-100);  // Full speed backward
+            vTaskDelay(80 / portTICK_PERIOD_MS);
+        }
         SetHeadSpeed(0);
         ESP_LOGI(TAG, "Head shake complete!");
     }
+
     void HeadShake_start() {
         ESP_LOGI(TAG, "start ");
         for (int i = 0; i < 2; i++) {
             SetHeadSpeed(100);   // Full speed forward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            vTaskDelay(80 / portTICK_PERIOD_MS);
             
             SetHeadSpeed(-100);  // Full speed backward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
-            
-            }
-        // ESP_LOGI(TAG, "Head shake complete!");
+            vTaskDelay(80 / portTICK_PERIOD_MS);
+        }
     }
+
     void HeadShake_stop() {
         ESP_LOGI(TAG, "stop Head shake (on/off mode)!");
         for (int i = 0; i < 1; i++) {
             SetHeadSpeed(100);   // Full speed forward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            vTaskDelay(80 / portTICK_PERIOD_MS);
             
             SetHeadSpeed(-100);  // Full speed backward
-            vTaskDelay(80 / portTICK_PERIOD_MS);   // Much faster (was 1000ms!)
+            vTaskDelay(80 / portTICK_PERIOD_MS);
         }
         SetHeadSpeed(0);
-        // ESP_LOGI(TAG, "Head shake complete!");
     }
 
     void HipShakeOnly() {
         ESP_LOGI(TAG, "Hip shake (on/off mode)!");
         SetHeadSpeed(0);
-        
         for (int i = 0; i < 12; i++) {
             SetHipSpeed(100);    // Forward
-            vTaskDelay(150 / portTICK_PERIOD_MS);  // Faster (was 200ms)
+            vTaskDelay(150 / portTICK_PERIOD_MS);
             SetHipSpeed(0);      // Stop - adds gentleness
-            vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief pause
+            vTaskDelay(50 / portTICK_PERIOD_MS);
             SetHipSpeed(-100);   // Backward
-            vTaskDelay(150 / portTICK_PERIOD_MS);  // Faster (was 200ms)
+            vTaskDelay(150 / portTICK_PERIOD_MS);
             SetHipSpeed(0);      // Stop - adds gentleness
-            vTaskDelay(50 / portTICK_PERIOD_MS);   // Brief pause
+            vTaskDelay(50 / portTICK_PERIOD_MS);
         }
         SetHipSpeed(0);
         ESP_LOGI(TAG, "Hip shake complete!");
-    }
-
-    // Optional: Create pulsed movement for more dynamic control
-    void PulsedHeadMovement(int cycles) {
-        ESP_LOGI(TAG, "Pulsed head movement!");
-        
-        for (int i = 0; i < cycles; i++) {
-            // Quick bursts
-            SetHeadSpeed(100);
-            vTaskDelay(50 / portTICK_PERIOD_MS);
-            SetHeadSpeed(0);
-            vTaskDelay(30 / portTICK_PERIOD_MS);
-            
-            SetHeadSpeed(-100);
-            vTaskDelay(50 / portTICK_PERIOD_MS);
-            SetHeadSpeed(0);
-            vTaskDelay(30 / portTICK_PERIOD_MS);
-        }
-        SetHeadSpeed(0);
     }
 
     void InitializeTools() {
@@ -239,7 +282,7 @@ private:
         
         mcp_server.AddTool("self.chassis.dance", "跳舞", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Dance command received");
-            SparkBotDance();
+            dance();
             return true;
         });
         
@@ -249,29 +292,24 @@ private:
             return true;
         });
         
+        // NEW MCP TOOL: Open motor control panel
+        
         mcp_server.AddTool("self_chassis_shake_hip", "摇屁股", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Hip shake command received");
             HipShakeOnly();
             return true;
         });
 
-        // Add new pulsed movement tool
-        mcp_server.AddTool("self_chassis_pulse_head", "脉冲摇头", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            ESP_LOGI(TAG, "Pulsed head movement command received");
-            PulsedHeadMovement(20);
-            return true;
-        });
+
         mcp_server.AddTool("self_chassis_shake_body_start", "摇头1", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            // ESP_LOGI(TAG, "Head shake command received");
             HeadShake_start();
             return true;
         });
+
         mcp_server.AddTool("self_chassis_shake_body_stop", "摇头2", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
-            // ESP_LOGI(TAG, "Head shake command received");
             HeadShake_stop();
             return true;
         });
-
     }
 
     void InitializeI2c() {
@@ -365,12 +403,12 @@ private:
         esp_lcd_panel_disp_on_off(panel, true);
         
         ESP_LOGI(TAG, "Panel handle: %p, Panel IO handle: %p", panel, panel_io);
-        display_ = new anim::EmojiWidget(panel, panel_io);  // Create emoji widget instead
+        display_ = new anim::EmojiWidget(panel, panel_io);
     }
 
     void InitializeCamera() {
         camera_config_t config = {};
-        config.ledc_channel = LEDC_CHANNEL_3;
+        config.ledc_channel = LEDC_CHANNEL_5;
         config.ledc_timer = LEDC_TIMER_1;
         config.pin_d0 = CAMERA_PIN_D0;
         config.pin_d1 = CAMERA_PIN_D1;
@@ -402,34 +440,12 @@ private:
 
 public:
     HeySantaBoard() : boot_button_(BOOT_BUTTON_GPIO), wake_button_(WAKE_BUTTON_GPIO) {
-        // IMMEDIATELY set all motor pins to safe state
-        gpio_reset_pin(GPIO_NUM_47);
-        gpio_reset_pin(GPIO_NUM_48); 
-        gpio_reset_pin(GPIO_NUM_19);
-        gpio_reset_pin(GPIO_NUM_20);
-        
-        gpio_set_direction(GPIO_NUM_47, GPIO_MODE_OUTPUT);
-        gpio_set_direction(GPIO_NUM_48, GPIO_MODE_OUTPUT);
-        gpio_set_direction(GPIO_NUM_19, GPIO_MODE_OUTPUT);
-        gpio_set_direction(GPIO_NUM_20, GPIO_MODE_OUTPUT);
-        
-        gpio_set_level(GPIO_NUM_47, 0);
-        gpio_set_level(GPIO_NUM_48, 0);
-        gpio_set_level(GPIO_NUM_19, 0);
-        gpio_set_level(GPIO_NUM_20, 0);
-        
-        ESP_LOGI(TAG, "EMERGENCY: All motor pins forced to LOW");
-        
-        // Small delay for hardware to settle
-        vTaskDelay(100 / portTICK_PERIOD_MS);
-        
-        // Then continue with normal initialization...
         InitializeI2c();
         InitializeSpi();
         InitializeSt7789Display();
         InitializeButtons();
         InitializeCamera();
-        InitializeMotors();  // Much simpler now - no PWM/LEDC!
+        Initialize_Motor();
         InitializeTools();
 
 #if CONFIG_IOT_PROTOCOL_XIAOZHI
