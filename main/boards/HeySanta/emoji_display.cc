@@ -114,25 +114,16 @@ void EmojiWidget::SetEmotion(const char* emotion)
     }
 
     using Param = std::tuple<int, bool, int>;
-    static const std::unordered_map<std::string, Param> emotion_map = {
-        {"bell",       {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"star",    {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"funny",       {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"loving",      {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"embarrassed", {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"confident",   {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"delicious",   {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"sad",         {MMAP_EMOJI_STAR_AAF,   true, 25}},
-        {"crying",      {MMAP_EMOJI_STAR_AAF,   true, 25}},
-        {"sleepy",      {MMAP_EMOJI_STAR_AAF,   true, 25}},
-        {"silly",       {MMAP_EMOJI_STAR_AAF,   true, 25}},
-        {"angry",       {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"surprised",   {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"shocked",     {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"thinking",    {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"winking",     {MMAP_EMOJI_STAR_AAF, true, 5}},
-        {"relaxed",     {MMAP_EMOJI_STAR_AAF, true, 25}},
-        {"confused",    {MMAP_EMOJI_STAR_AAF, true, 25}},
+    static const std::unordered_map<std::string, Param> emoji_map = {
+         {"bell",       {MMAP_EMOJI_BELL_AAF,      true, 20}},
+         {"blinking",   {MMAP_EMOJI_BLINKING_AAF,  true, 15}},
+         {"cookie",     {MMAP_EMOJI_COOKIE_AAF,    true, 25}},
+         {"deer",       {MMAP_EMOJI_DEER_AAF,      true, 18}},
+         {"heart",      {MMAP_EMOJI_HEART_AAF,     true, 30}},
+         {"sleep",      {MMAP_EMOJI_SLEEP_AAF,     true, 10}},
+         {"snowman",    {MMAP_EMOJI_SNOWMAN_AAF,   true, 22}},
+         {"star",       {MMAP_EMOJI_STAR_AAF,      true, 25}},
+         {"elf",        {MMAP_EMOJI_WHOLE_ELF_AAF, true, 25}},
     };
 
     auto it = emotion_map.find(emotion);
