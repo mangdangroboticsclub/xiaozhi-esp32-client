@@ -329,6 +329,9 @@ file(COPY "${CMAKE_SOURCE_DIR}/emoji/cookie.aaf" DESTINATION "${SPIFFS_DIR}")
 file(COPY "${CMAKE_SOURCE_DIR}/emoji/Whole_elf.aaf" DESTINATION "${SPIFFS_DIR}")
 file(COPY "${CMAKE_SOURCE_DIR}/emoji/sleep.aaf" DESTINATION "${SPIFFS_DIR}")
 file(COPY "${CMAKE_SOURCE_DIR}/emoji/deer.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/cross.aaf" DESTINATION "${SPIFFS_DIR}")
+file(COPY "${CMAKE_SOURCE_DIR}/emoji/happy.aaf" DESTINATION "${SPIFFS_DIR}")
+
 
 spiffs_create_partition_assets(
     assets_A
