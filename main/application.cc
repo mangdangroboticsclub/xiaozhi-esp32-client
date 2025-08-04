@@ -510,48 +510,101 @@ void Application::Start() {
         auto type = cJSON_GetObjectItem(root, "type");
         if (strcmp(type->valuestring, "tts") == 0) {
             auto state = cJSON_GetObjectItem(root, "state");
+
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-    // Declare static variable outside of the if blocks so it's shared
-    static std::chrono::steady_clock::time_point tts_start_time;
+            // Declare static variables outside of the if blocks so they're shared
+            static std::chrono::steady_clock::time_point tts_start_time;
+            static std::chrono::steady_clock::time_point last_bell_time;
+            static std::chrono::steady_clock::time_point last_mcp_time;
+            static const int BELL_COOLDOWN_MS = 10000; // 8 second cooldown between bells
+            static const int MCP_SUPPRESS_MS = 3000;  // Suppress bell for 3 seconds after MCP activity
 #endif
 
-    if (strcmp(state->valuestring, "start") == 0) {
+            if (strcmp(state->valuestring, "start") == 0) {
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-        // Record the start time of TTS
-        tts_start_time = std::chrono::steady_clock::now();
-#endif
+                auto now = std::chrono::steady_clock::now();
+                auto time_since_last_bell = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_bell_time).count();
+                auto time_since_mcp = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_mcp_time).count();
+                
+                // Record the start time of TTS
+                tts_start_time = now;
+                
+                // Don't play bell if:
+                // 1. Not enough time since last bell (cooldown)
+                // 2. Recent MCP activity (likely MCP response)
+                bool should_play_bell = (time_since_last_bell > BELL_COOLDOWN_MS) && 
+                                      (time_since_mcp > MCP_SUPPRESS_MS || last_mcp_time.time_since_epoch().count() == 0);
+                
+                if (should_play_bell) {
+                    ESP_LOGI(TAG, "TTS start - playing bell (bell cooldown: %d ms, MCP time: %d ms)", 
+                             (int)time_since_last_bell, (int)time_since_mcp);
+                    
+                    Schedule([this]() {
+                        ESP_LOGI(TAG, "Playing bell sound - device state: %s", STATE_STRINGS[device_state_]);
+                        
+                        aborted_ = false;
+                        if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+                            SetDeviceState(kDeviceStateSpeaking);
+                        }
+                        
+                        background_task_->WaitForCompletion();
+                        ESP_LOGI(TAG, "Playing P3_TAHU for HEYSANTA");
+                        ResetDecoder();
+                        PlaySound(Lang::Sounds::P3_TAHU);
+                        ESP_LOGI(TAG, "P3_TAHU queued for HEYSANTA");
+                    });
+                    
+                    last_bell_time = now;
+                } else {
+                    ESP_LOGI(TAG, "TTS start - skipping bell (bell cooldown: %d ms, MCP suppress: %d ms)", 
+                             (int)time_since_last_bell, (int)time_since_mcp);
+                    
+                    Schedule([this]() {
+                        aborted_ = false;
+                        if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+                            SetDeviceState(kDeviceStateSpeaking);
+                        }
+                    });
+                }
+#else
                 Schedule([this]() {
                     aborted_ = false;
                     if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
                         SetDeviceState(kDeviceStateSpeaking);
                     }
                 });
+#endif
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     background_task_->WaitForCompletion();
                     if (device_state_ == kDeviceStateSpeaking) {
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-            // Calculate the duration of TTS
-            auto tts_end_time = std::chrono::steady_clock::now();
-            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tts_end_time - tts_start_time).count();
-            ESP_LOGI(TAG, "TTS sequence complete: %d ms", (int)duration_ms);
+                        // Calculate the duration of TTS
+                        auto tts_end_time = std::chrono::steady_clock::now();
+                        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tts_end_time - tts_start_time).count();
+                        ESP_LOGI(TAG, "TTS sequence complete: %d ms", (int)duration_ms);
 
-            if (1) {
-                ESP_LOGI(TAG, "finish TTS detected (%d ms)", (int)duration_ms);
+                        // Only trigger stop shake for longer TTS sequences (likely actual speech, not MCP responses)
+                        if (duration_ms > 2000) { // Only for TTS longer than 2 seconds
+                            ESP_LOGI(TAG, "Long TTS detected (%d ms), triggering stop shake", (int)duration_ms);
 
-                // Schedule shake BEFORE any display update or state change
-                background_task_->Schedule([this]() {
-                    ESP_LOGI(TAG, "stop Head shake ");
-                    static int mcp_id_counter = 1000;
-                    mcp_id_counter++;
-                    char mcp_message[256];
-                    snprintf(mcp_message, sizeof(mcp_message),
-                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_stop\",\"arguments\":{}}}",
-                        mcp_id_counter);
-                    McpServer::GetInstance().ParseMessage(mcp_message);
-                    // ESP_LOGI(TAG, "Shake command sent via MCP with ID %d", mcp_id_counter);
-                });
-            }
+                            background_task_->Schedule([this]() {
+                                ESP_LOGI(TAG, "stop Head shake ");
+                                static int mcp_id_counter = 1000;
+                                mcp_id_counter++;
+                                char mcp_message[256];
+                                snprintf(mcp_message, sizeof(mcp_message),
+                                    "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_stop\",\"arguments\":{}}}",
+                                    mcp_id_counter);
+                                McpServer::GetInstance().ParseMessage(mcp_message);
+                                
+                                // Update MCP timestamp to suppress future bells
+                                static std::chrono::steady_clock::time_point last_mcp_time;
+                                last_mcp_time = std::chrono::steady_clock::now();
+                            });
+                        } else {
+                            ESP_LOGI(TAG, "Short TTS detected (%d ms), skipping stop shake", (int)duration_ms);
+                        }
 #endif
 
                         if (listening_mode_ == kListeningModeManualStop) {
@@ -575,28 +628,32 @@ void Application::Start() {
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-        // Configure shake probability (0-100 percent)
-        static const int SHAKE_PROBABILITY = 100; // Change this value to adjust chance (0-100)
-        
-        // Generate random number between 0-99
-        int random_chance = esp_random() % 100;
-        
-        if (random_chance < SHAKE_PROBABILITY) {
-            ESP_LOGI(TAG, "User input detected, triggering body shake (chance: %d/%d)", random_chance, SHAKE_PROBABILITY);
-            background_task_->Schedule([this]() {
-                ESP_LOGI(TAG, "Trying to trigger shake...");
-                static int mcp_id_counter = 1000;
-                mcp_id_counter++;
-                char mcp_message[256];
-                snprintf(mcp_message, sizeof(mcp_message),
-                    "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_start\",\"arguments\":{}}}",
-                    mcp_id_counter);
-                McpServer::GetInstance().ParseMessage(mcp_message);
-                ESP_LOGI(TAG, "Shake command sent via MCP with ID %d", mcp_id_counter);
-            });
-        } else {
-            ESP_LOGI(TAG, "User input detected, no shake this time (chance: %d/%d)", random_chance, SHAKE_PROBABILITY);
-        }
+                // Configure shake probability (0-100 percent)
+                static const int SHAKE_PROBABILITY = 100; // Change this value to adjust chance (0-100)
+                
+                // Generate random number between 0-99
+                int random_chance = esp_random() % 100;
+                
+                if (random_chance < SHAKE_PROBABILITY) {
+                    ESP_LOGI(TAG, "User input detected, triggering body shake (chance: %d/%d)", random_chance, SHAKE_PROBABILITY);
+                    background_task_->Schedule([this]() {
+                        ESP_LOGI(TAG, "Trying to trigger shake...");
+                        static int mcp_id_counter = 1000;
+                        mcp_id_counter++;
+                        char mcp_message[256];
+                        snprintf(mcp_message, sizeof(mcp_message),
+                            "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_start\",\"arguments\":{}}}",
+                            mcp_id_counter);
+                        McpServer::GetInstance().ParseMessage(mcp_message);
+                        ESP_LOGI(TAG, "Shake command sent via MCP with ID %d", mcp_id_counter);
+                        
+                        // Update MCP timestamp when sending MCP commands
+                        static std::chrono::steady_clock::time_point last_mcp_time;
+                        last_mcp_time = std::chrono::steady_clock::now();
+                    });
+                } else {
+                    ESP_LOGI(TAG, "User input detected, no shake this time (chance: %d/%d)", random_chance, SHAKE_PROBABILITY);
+                }
 #endif
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
@@ -611,6 +668,12 @@ void Application::Start() {
             }
 #if CONFIG_IOT_PROTOCOL_MCP
         } else if (strcmp(type->valuestring, "mcp") == 0) {
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+            // Update MCP activity timestamp whenever we receive MCP messages
+            static std::chrono::steady_clock::time_point last_mcp_time;
+            last_mcp_time = std::chrono::steady_clock::now();
+            ESP_LOGI(TAG, "MCP activity detected, will suppress bells for next 3 seconds");
+#endif
             auto payload = cJSON_GetObjectItem(root, "payload");
             if (cJSON_IsObject(payload)) {
                 McpServer::GetInstance().ParseMessage(payload);
@@ -765,7 +828,7 @@ void Application::Start() {
         // Play the success sound to indicate the device is ready
         ResetDecoder();
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-        PlaySound(Lang::Sounds::P3_HO);
+        PlaySound(Lang::Sounds::P3_BALLS);
 #else
         PlaySound(Lang::Sounds::P3_SUCCESS);
 #endif
@@ -880,6 +943,18 @@ void Application::OnAudioOutput() {
 
     auto packet = std::move(audio_decode_queue_.front());
     audio_decode_queue_.pop_front();
+    
+    // Check if decoder exists while holding the lock
+    if (!opus_decoder_) {
+        ESP_LOGW(TAG, "OnAudioOutput: opus_decoder_ is null, aborting");
+        lock.unlock();
+        audio_decode_cv_.notify_all();
+        return;
+    }
+    
+    // Get decoder info while holding the lock
+    int decoder_sample_rate = opus_decoder_->sample_rate();
+    
     lock.unlock();
     audio_decode_cv_.notify_all();
 
@@ -887,18 +962,30 @@ void Application::OnAudioOutput() {
     SetDecodeSampleRate(packet.sample_rate, packet.frame_duration);
 
     busy_decoding_audio_ = true;
-    background_task_->Schedule([this, codec, packet = std::move(packet)]() mutable {
+    background_task_->Schedule([this, codec, packet = std::move(packet), decoder_sample_rate]() mutable {
         busy_decoding_audio_ = false;
         if (aborted_) {
             return;
         }
 
         std::vector<int16_t> pcm;
-        if (!opus_decoder_->Decode(std::move(packet.payload), pcm)) {
-            return;
+        
+        // Use mutex to safely access opus_decoder_
+        {
+            std::lock_guard<std::mutex> decode_lock(mutex_);
+            if (!opus_decoder_) {
+                ESP_LOGW(TAG, "OnAudioOutput: opus_decoder_ is null during decode, aborting");
+                return;
+            }
+            
+            if (!opus_decoder_->Decode(std::move(packet.payload), pcm)) {
+                return;
+            }
         }
+        
         // Resample if the sample rate is different
-        if (opus_decoder_->sample_rate() != codec->output_sample_rate()) {
+        if (decoder_sample_rate != codec->output_sample_rate()) {
+
             int target_size = output_resampler_.GetOutputSamples(pcm.size());
             std::vector<int16_t> resampled(target_size);
             output_resampler_.Process(pcm.data(), pcm.size(), resampled.data());
@@ -906,7 +993,7 @@ void Application::OnAudioOutput() {
         }
         codec->OutputData(pcm);
 #ifdef CONFIG_USE_SERVER_AEC
-        std::lock_guard<std::mutex> lock(timestamp_mutex_);
+        std::lock_guard<std::mutex> ts_lock(timestamp_mutex_);
         timestamp_queue_.push_back(packet.timestamp);
 #endif
         last_output_time_ = std::chrono::steady_clock::now();
@@ -1103,9 +1190,12 @@ void Application::ResetDecoder() {
 }
 
 void Application::SetDecodeSampleRate(int sample_rate, int frame_duration) {
-    if (opus_decoder_->sample_rate() == sample_rate && opus_decoder_->duration_ms() == frame_duration) {
+    std::lock_guard<std::mutex> lock(mutex_);  // Add mutex protection
+    
+    if (opus_decoder_ && opus_decoder_->sample_rate() == sample_rate && opus_decoder_->duration_ms() == frame_duration) {
         return;
     }
+    ESP_LOGI(TAG, "Setting decoder sample rate to %d Hz, frame duration to %d ms", sample_rate, frame_duration);
 
     opus_decoder_.reset();
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(sample_rate, 1, frame_duration);
@@ -1170,6 +1260,13 @@ void Application::SendMcpMessage(const std::string& payload) {
     ESP_LOGI(TAG, "=== SendMcpMessage called ===");
     ESP_LOGI(TAG, "Payload: %s", payload.c_str());
     ESP_LOGI(TAG, "Protocol pointer: %p", (void*)protocol_.get());
+    
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+    // Update MCP activity timestamp when sending MCP messages
+    static std::chrono::steady_clock::time_point last_mcp_time;
+    last_mcp_time = std::chrono::steady_clock::now();
+    ESP_LOGI(TAG, "MCP message sent, will suppress bells for next 3 seconds");
+#endif
     
     background_task_->Schedule([this, payload]() {
         ESP_LOGI(TAG, "=== Inside SendMcpMessage background task ===");
