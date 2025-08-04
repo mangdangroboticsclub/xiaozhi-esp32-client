@@ -46,6 +46,30 @@ void Protocol::SendWakeWordDetected(const std::string& wake_word) {
     SendText(json);
 }
 
+void Protocol::SendSttMessage(const std::string& text) {
+    std::string json = "{\"session_id\":\"" + session_id_ + 
+                      "\",\"type\":\"stt\",\"text\":\"" + text + "\"}";
+    SendText(json);
+}
+
+void Protocol::SendTextListening(const std::string& text, ListeningMode mode) {
+    std::string message = "{\"session_id\":\"" + session_id_ + "\"";
+    message += ",\"type\":\"listen\",\"state\":\"detect\"";
+    if (mode == kListeningModeRealtime) {
+        message += ",\"mode\":\"realtime\"";
+    } else if (mode == kListeningModeAutoStop) {
+        message += ",\"mode\":\"auto\"";
+    } else {
+        message += ",\"mode\":\"manual\"";
+    }
+    message += ",\"text\":\"" + text + "\"}";
+    SendText(message);
+}
+
+void Protocol::SendDirectMessage(const std::string& message) {
+    SendText(message);
+}
+
 void Protocol::SendStartListening(ListeningMode mode) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\"";
     message += ",\"type\":\"listen\",\"state\":\"start\"";
@@ -118,6 +142,10 @@ void Protocol::SendIotStates(const std::string& states) {
 void Protocol::SendMcpMessage(const std::string& payload) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";
     SendText(message);
+}
+
+void Protocol::RefreshActivity() {
+    last_incoming_time_ = std::chrono::steady_clock::now();
 }
 
 bool Protocol::IsTimeout() const {

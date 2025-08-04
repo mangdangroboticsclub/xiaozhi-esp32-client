@@ -24,6 +24,10 @@
 #include "wake_word.h"
 #include "audio_debugger.h"
 
+#if CONFIG_BT_NIMBLE_ENABLED
+#include "protocols/ble_protocol.h"
+#endif
+
 #define SCHEDULE_EVENT (1 << 0)
 #define SEND_AUDIO_EVENT (1 << 1)
 #define CHECK_NEW_VERSION_DONE_EVENT (1 << 2)
@@ -93,6 +97,11 @@ private:
     std::mutex mutex_;
     std::list<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
+
+#if CONFIG_BT_NIMBLE_ENABLED
+    std::unique_ptr<BleProtocol> ble_protocol_;
+#endif
+
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
