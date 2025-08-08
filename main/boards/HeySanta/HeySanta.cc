@@ -25,7 +25,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "emoji_display.h"
-// Add these new includes for web server
+// Add these includes for web server
+#include "esp_http_server.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include <string.h>
+#include <cstdlib>
 
 
 #define TAG "HeySanta"
@@ -36,7 +41,9 @@ LV_FONT_DECLARE(font_awesome_20_4);
 float m1_coefficient = 1.0;
 float m2_coefficient = 1.0;
 
-
+// Global variables for web server
+static httpd_handle_t speech_server = NULL;
+static bool web_speech_active = false;
 
 class HeySantaCodec : public SantaAudioCodec  {
 private:    
@@ -88,8 +95,8 @@ private:
             };
             ESP_ERROR_CHECK(ledc_channel_config(&ledc_channel));
         }
-        
-    
+
+
     }
 
     static void set_motor_A_speed(int speed)
@@ -173,15 +180,372 @@ private:
         set_motor_B_speed(speed);    
     }
 
+    // Web server handlers for speech only
+    static esp_err_t speech_control_page_handler(httpd_req_t *req) {
+        httpd_resp_set_type(req, "text/html; charset=utf-8");
+        
+        const char* html = 
+        "<!DOCTYPE html>"
+        "<html>"
+        "<head>"
+        "<meta charset='UTF-8'>"
+        "<title>&#127876; Santa Speech Control</title>"
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<style>"
+        "body { font-family: 'Arial', sans-serif; text-align: center; margin: 0; padding: 20px; background: linear-gradient(135deg, #2E7D32 0%, #C62828 50%, #2E7D32 100%); color: white; min-height: 100vh; }"
+        ".container { max-width: 600px; margin: 0 auto; background: rgba(255,255,255,0.15); padding: 40px; border-radius: 25px; backdrop-filter: blur(15px); box-shadow: 0 10px 40px rgba(0,0,0,0.3); border: 2px solid rgba(255,255,255,0.2); }"
+        "h1 { color: #fff; margin-bottom: 30px; text-shadow: 3px 3px 6px rgba(0,0,0,0.5); font-size: 32px; animation: glow 2s ease-in-out infinite alternate; }"
+        "@keyframes glow { from { text-shadow: 3px 3px 6px rgba(0,0,0,0.5), 0 0 10px rgba(255,255,255,0.3); } to { text-shadow: 3px 3px 6px rgba(0,0,0,0.5), 0 0 20px rgba(255,255,255,0.6); } }"
+        "h2 { color: #fff; margin: 30px 0 20px 0; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); font-size: 24px; }"
+        "button { padding: 15px 30px; margin: 10px; font-size: 18px; border: none; border-radius: 15px; cursor: pointer; min-width: 160px; transition: all 0.3s ease; font-weight: bold; }"
+        ".speak-btn { background: linear-gradient(45deg, #4CAF50, #45a049); color: white; box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4); }"
+        ".stop-btn { background: linear-gradient(45deg, #F44336, #D32F2F); color: white; box-shadow: 0 6px 20px rgba(244, 67, 54, 0.4); }"
+        ".status-btn { background: linear-gradient(45deg, #FF9800, #F57C00); color: white; box-shadow: 0 6px 20px rgba(255, 152, 0, 0.4); }"
+        ".clear-btn { background: linear-gradient(45deg, #9E9E9E, #757575); color: white; box-shadow: 0 6px 20px rgba(158, 158, 158, 0.4); }"
+        "button:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.4); }"
+        "button:active { transform: translateY(0); }"
+        ".speech-control { margin: 30px 0; padding: 30px; background: rgba(255,255,255,0.1); border-radius: 20px; backdrop-filter: blur(10px); border: 2px solid rgba(255,255,255,0.2); }"
+        ".speech-input {"
+        "  width: 100%;"
+        "  padding: 20px;"
+        "  font-size: 18px;"
+        "  border: 3px solid rgba(255,255,255,0.3);"
+        "  border-radius: 15px;"
+        "  background: rgba(255,255,255,0.1);"
+        "  color: white;"
+        "  backdrop-filter: blur(10px);"
+        "  margin: 15px 0;"
+        "  box-sizing: border-box;"
+        "  transition: all 0.3s ease;"
+        "}"
+        ".speech-input::placeholder { color: rgba(255,255,255,0.7); }"
+        ".speech-input:focus { outline: none; border-color: #4CAF50; background: rgba(255,255,255,0.2); box-shadow: 0 0 15px rgba(76, 175, 80, 0.5); }"
+        ".preset-messages { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; margin: 20px 0; }"
+        ".preset-btn {"
+        "  background: linear-gradient(45deg, #E91E63, #C2185B);"
+        "  color: white;"
+        "  padding: 12px 18px;"
+        "  font-size: 16px;"
+        "  border-radius: 12px;"
+        "  cursor: pointer;"
+        "  border: none;"
+        "  transition: all 0.3s ease;"
+        "  box-shadow: 0 4px 15px rgba(233, 30, 99, 0.4);"
+        "  min-width: 140px;"
+        "}"
+        ".preset-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(233, 30, 99, 0.6); }"
+        ".status { margin: 25px 0; padding: 20px; background: rgba(255,255,255,0.1); border-radius: 15px; font-weight: bold; backdrop-filter: blur(10px); border: 2px solid rgba(255,255,255,0.2); font-size: 18px; }"
+        ".santa-emoji { font-size: 48px; margin: 20px 0; animation: bounce 2s infinite; }"
+        "@keyframes bounce { 0%, 20%, 50%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-10px); } 60% { transform: translateY(-5px); } }"
+        ".char-counter { font-size: 14px; color: rgba(255,255,255,0.8); margin-top: 5px; }"
+        ".control-buttons { display: flex; flex-wrap: wrap; gap: 15px; justify-content: center; margin: 20px 0; }"
+        "@media (max-width: 600px) {"
+        "  .container { margin: 10px; padding: 25px; }"
+        "  h1 { font-size: 28px; }"
+        "  .speech-input { font-size: 16px; padding: 15px; }"
+        "  button { padding: 12px 20px; font-size: 16px; min-width: 130px; }"
+        "  .preset-btn { min-width: 120px; font-size: 14px; }"
+        "  .control-buttons { flex-direction: column; }"
+        "}"
+        "</style>"
+        "</head>"
+        "<body>"
+        "<div class='container'>"
+        "<div class='santa-emoji'>&#127876;</div>"
+        "<h1>&#127876; Santa Speech Control &#127876;</h1>"
+        
+        "<div class='speech-control'>"
+        "<h2>&#128483; Make Santa Speak</h2>"
+        "<input type='text' class='speech-input' id='speechText' placeholder='Type what Santa should say... Ho ho ho!' maxlength='300'>"
+        "<div class='char-counter'><span id='charCount'>0</span>/300 characters</div>"
+        
+        "<div class='preset-messages'>"
+        "<button class='preset-btn' onclick=\"setSpeechText('Ho ho ho! Merry Christmas everyone!')\">&#127876; Merry Christmas</button>"
+        "<button class='preset-btn' onclick=\"setSpeechText('Have you been good this year?')\">&#128519; Been Good?</button>"
+        "<button class='preset-btn' onclick=\"setSpeechText('What would you like for Christmas?')\">&#127873; Christmas Wish</button>"
+        "<button class='preset-btn' onclick=\"setSpeechText('Time for milk and cookies!')\">&#127850; Milk & Cookies</button>"
+        "<button class='preset-btn' onclick=\"setSpeechText('Ho ho ho! I can see you!')\">&#128064; I See You</button>"
+        "<button class='preset-btn' onclick=\"setSpeechText('Christmas magic is in the air!')\">&#10024; Christmas Magic</button>"
+        "</div>"
+        
+        "<div class='control-buttons'>"
+        "<button class='speak-btn' onclick='makeSantaSpeak()'>&#127876; MAKE SANTA SPEAK</button>"
+        "<button class='stop-btn' onclick='stopSanta()'>&#9209; STOP SANTA</button>"
+        "<button class='clear-btn' onclick='clearText()'>&#128465; CLEAR</button>"
+        "</div>"
+        "</div>"
+        
+        "<div>"
+        "<button class='status-btn' onclick='getStatus()'>&#128202; CHECK STATUS</button>"
+        "</div>"
+        
+        "<div id='status' class='status'>&#127876; Ho ho ho! Ready to spread Christmas joy!</div>"
+        "</div>"
+        
+        "<script>"
+        "console.log('Santa page loading...');"
+        "const speechInput = document.getElementById('speechText');"
+        "const charCount = document.getElementById('charCount');"
+        
+        "speechInput.addEventListener('input', function() {"
+        "  charCount.textContent = this.value.length;"
+        "  if (this.value.length > 250) {"
+        "    charCount.style.color = '#ff6b6b';"
+        "  } else {"
+        "    charCount.style.color = 'rgba(255,255,255,0.8)';"
+        "  }"
+        "});"
+        
+        "function setSpeechText(text) {"
+        "  console.log('Setting speech text:', text);"
+        "  speechInput.value = text;"
+        "  speechInput.dispatchEvent(new Event('input'));"
+        "}"
+        
+        "function clearText() {"
+        "  console.log('Clearing text');"
+        "  speechInput.value = '';"
+        "  speechInput.dispatchEvent(new Event('input'));"
+        "  speechInput.focus();"
+        "}"
+        
+        "function makeSantaSpeak() {"
+        "  console.log('MAKE SANTA SPEAK button clicked!');"
+        "  const text = speechInput.value.trim();"
+        "  console.log('Text to speak:', text);"
+        "  "
+        "  if (text === '') {"
+        "    console.warn('No text provided');"
+        "    document.getElementById('status').innerText = 'Please enter some text for Santa to say!';"
+        "    document.getElementById('status').style.background = 'rgba(244, 67, 54, 0.3)';"
+        "    speechInput.focus();"
+        "    return;"
+        "  }"
+        "  "
+        "  console.log('Sending fetch request to /speak');"
+        "  document.getElementById('status').innerText = 'Santa is preparing to speak...';"
+        "  document.getElementById('status').style.background = 'rgba(255, 193, 7, 0.3)';"
+        "  "
+        "  const url = '/speak?text=' + encodeURIComponent(text);"
+        "  console.log('Full URL:', url);"
+        "  "
+        "  fetch(url)"
+        "    .then(response => {"
+        "      console.log('Response received:', response.status, response.statusText);"
+        "      return response.text();"
+        "    })"
+        "    .then(data => {"
+        "      console.log('Response data:', data);"
+        "      document.getElementById('status').innerText = data;"
+        "      document.getElementById('status').style.background = 'rgba(76, 175, 80, 0.3)';"
+        "      speechInput.value = '';"
+        "      speechInput.dispatchEvent(new Event('input'));"
+        "    })"
+        "    .catch(error => {"
+        "      console.error('Fetch error:', error);"
+        "      document.getElementById('status').innerText = 'Speech Error: ' + error;"
+        "      document.getElementById('status').style.background = 'rgba(244, 67, 54, 0.3)';"
+        "    });"
+        "}"
+        
+        // NEW STOP FUNCTION
+        "function stopSanta() {"
+        "  console.log('STOP SANTA button clicked!');"
+        "  document.getElementById('status').innerText = 'Stopping Santa...';"
+        "  document.getElementById('status').style.background = 'rgba(244, 67, 54, 0.3)';"
+        "  "
+        "  fetch('/stop')"
+        "    .then(response => {"
+        "      console.log('Stop response:', response.status);"
+        "      return response.text();"
+        "    })"
+        "    .then(data => {"
+        "      console.log('Stop response data:', data);"
+        "      document.getElementById('status').innerText = data;"
+        "      document.getElementById('status').style.background = 'rgba(255, 152, 0, 0.3)';"
+        "    })"
+        "    .catch(error => {"
+        "      console.error('Stop error:', error);"
+        "      document.getElementById('status').innerText = 'Stop Error: ' + error;"
+        "      document.getElementById('status').style.background = 'rgba(244, 67, 54, 0.3)';"
+        "    });"
+        "}"
+        
+        "function getStatus() {"
+        "  console.log('Getting status...');"
+        "  fetch('/status')"
+        "    .then(response => {"
+        "      console.log('Status response:', response.status);"
+        "      return response.text();"
+        "    })"
+        "    .then(data => {"
+        "      console.log('Status data:', data);"
+        "      document.getElementById('status').innerText = data;"
+        "      document.getElementById('status').style.background = 'rgba(33, 150, 243, 0.3)';"
+        "    })"
+        "    .catch(error => {"
+        "      console.error('Status error:', error);"
+        "      document.getElementById('status').innerText = 'Error: ' + error;"
+        "      document.getElementById('status').style.background = 'rgba(244, 67, 54, 0.3)';"
+        "    });"
+        "}"
+        
+        "speechInput.addEventListener('keypress', function(e) {"
+        "  if (e.key === 'Enter') {"
+        "    console.log('Enter key pressed');"
+        "    makeSantaSpeak();"
+        "  }"
+        "});"
+        
+        "window.onload = function() {"
+        "  console.log('Page fully loaded');"
+        "  speechInput.focus();"
+        "  getStatus();"
+        "};"
+        
+        "setInterval(getStatus, 10000);"
+        "</script>"
+        "</body>"
+        "</html>";
+        
+        httpd_resp_send(req, html, strlen(html));
+        return ESP_OK;
+    }
+
+    static esp_err_t status_handler(httpd_req_t *req) {
+        char response[256];
+        snprintf(response, sizeof(response), 
+                 "🎅 Santa is ready to speak! | 🎄 Christmas magic activated! | ✨ Web interface connected!");
+        
+        httpd_resp_send(req, response, strlen(response));
+        return ESP_OK;
+    }
+
+    // Speech handler for web requests
+    // Speech handler for web requests
+    static esp_err_t speak_handler(httpd_req_t *req) {
+        ESP_LOGI(TAG, "🎅 === SPEAK HANDLER CALLED ===");
+        
+        // Use smaller, stack-efficient buffers
+        char* query = (char*)malloc(512);
+        if (!query) {
+            ESP_LOGE(TAG, "Failed to allocate query buffer");
+            httpd_resp_send(req, "❌ Memory error", -1);
+            return ESP_ERR_NO_MEM;
+        }
+        
+        esp_err_t query_result = httpd_req_get_url_query_str(req, query, 512);
+        ESP_LOGI(TAG, "🎅 Query string retrieval result: %s", esp_err_to_name(query_result));
+        
+        if (query_result == ESP_OK) {
+            ESP_LOGI(TAG, "🎅 Query string: '%.100s%s'", query, strlen(query) > 100 ? "..." : "");
+            
+            char* text = (char*)malloc(256);
+            if (!text) {
+                free(query);
+                ESP_LOGE(TAG, "Failed to allocate text buffer");
+                httpd_resp_send(req, "❌ Memory error", -1);
+                return ESP_ERR_NO_MEM;
+            }
+            
+            esp_err_t param_result = httpd_query_key_value(query, "text", text, 256);
+            ESP_LOGI(TAG, "🎅 Text parameter extraction result: %s", esp_err_to_name(param_result));
+            
+            if (param_result == ESP_OK) {
+                ESP_LOGI(TAG, "🎅 Raw text: '%.50s%s' (len: %d)", 
+                        text, strlen(text) > 50 ? "..." : "", (int)strlen(text));
+                
+                // Proper URL decode
+                std::string decoded_text;
+                for (int i = 0; text[i]; i++) {
+                    if (text[i] == '+') {
+                        decoded_text += ' ';
+                    } else if (text[i] == '%' && text[i+1] && text[i+2]) {
+                        // Convert hex to char
+                        char hex[3] = {text[i+1], text[i+2], 0};
+                        char decoded_char = (char)strtol(hex, NULL, 16);
+                        decoded_text += decoded_char;
+                        i += 2; // Skip the two hex digits
+                    } else {
+                        decoded_text += text[i];
+                    }
+                }
+                
+                ESP_LOGI(TAG, "🎅 Decoded text: '%s'", decoded_text.c_str());
+                ESP_LOGI(TAG, "🎅 *** CALLING app.SpeakText() ***");
+                
+                // Get application instance and call SpeakText
+                auto& app = Application::GetInstance();
+                app.SpeakText(decoded_text);
+                
+                ESP_LOGI(TAG, "🎅 *** app.SpeakText() completed ***");
+                
+                // Send simple response
+                const char* response = "🎅 Santa speech command sent successfully!";
+                httpd_resp_send(req, response, strlen(response));
+                
+                free(text);
+                free(query);
+                ESP_LOGI(TAG, "🎅 === SPEAK HANDLER COMPLETED ===");
+                return ESP_OK;
+            }
+            free(text);
+        }
+        
+        free(query);
+        ESP_LOGW(TAG, "🎅 === SPEAK HANDLER FAILED ===");
+        httpd_resp_send(req, "❌ No text provided", -1);
+        return ESP_OK;
+    }
+    // Add this new handler function in heysanta.cc
+    // Replace the existing stop_handler with this version
+    static esp_err_t stop_handler(httpd_req_t *req) {
+        ESP_LOGI(TAG, "🛑 === STOP HANDLER CALLED ===");
+
+        auto& app = Application::GetInstance();
+
+        // 1) Mark the web control panel as inactive (same as MCP tool)
+        app.SetWebControlPanelActive(false);
+
+        // 2) Send immediate response to the browser
+        const char* response = "🔴 Santa speech control panel closed. Web server will stop shortly.";
+        httpd_resp_send(req, response, strlen(response));
+
+        // 3) Defer the actual stop/reset work to the application task to avoid
+        //    stopping the HTTP server from within its own handler thread.
+        app.Schedule([&app]() {
+            ESP_LOGI(TAG, "🛑 Stopping Santa and resetting to idle...");
+
+            // Abort current speech and reset device state
+            app.AbortSpeaking(kAbortReasonNone);
+            vTaskDelay(200 / portTICK_PERIOD_MS);
+            app.SetDeviceState(kDeviceStateIdle);
+
+            // Stop the speech web server safely from another task context
+            if (speech_server != NULL) {
+                ESP_LOGI(TAG, "🛑 Stopping Santa speech web server (async)...");
+                httpd_stop(speech_server);
+                speech_server = NULL;
+                web_speech_active = false;
+                ESP_LOGI(TAG, "🛑 Santa speech web server stopped");
+            }
+
+            ESP_LOGI(TAG, "🛑 Stop completed. Device reset to idle and control panel closed.");
+        });
+
+        ESP_LOGI(TAG, "🛑 === STOP HANDLER COMPLETED (response sent, shutdown scheduled) ===");
+        return ESP_OK;
+    }
+
     uint32_t unbiasedRandom3() {
-    uint32_t r;
-    const uint32_t upper_bound = 0xFFFFFFFF - (0xFFFFFFFF % 3);
-    
-    do {
-        r = esp_random();
-    } while (r >= upper_bound);
-    
-    return r % 3;
+        uint32_t r;
+        const uint32_t upper_bound = 0xFFFFFFFF - (0xFFFFFFFF % 3);
+        
+        do {
+            r = esp_random();
+        } while (r >= upper_bound);
+        
+        return r % 3;
     }
 
     uint32_t unbiasedRandomRange(int min, int max) {
@@ -277,6 +641,75 @@ private:
         ESP_LOGI(TAG, "Hip shake complete!");
     }
 
+    void start_speech_webserver(void) {
+        if (speech_server != NULL) {
+            ESP_LOGI(TAG, "Speech web server already running");
+            return;
+        }
+
+        httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+        config.server_port = 8080;
+        config.lru_purge_enable = true;
+        
+        // INCREASE STACK SIZE TO PREVENT OVERFLOW
+        config.stack_size = 8192;  // Increase from default 4096 to 8192
+        config.task_priority = 5;  // Set appropriate priority
+        config.max_uri_handlers = 10;  // Limit handlers
+        config.max_resp_headers = 8;   // Limit response headers
+        
+        ESP_LOGI(TAG, "Starting Santa speech HTTP server on port: %d with stack size: %d", 
+                config.server_port, config.stack_size);
+                
+        if (httpd_start(&speech_server, &config) == ESP_OK) {
+            // Set URI handlers
+            httpd_uri_t uri_get = {
+                .uri       = "/",
+                .method    = HTTP_GET,
+                .handler   = speech_control_page_handler,
+                .user_ctx  = NULL
+            };
+            httpd_register_uri_handler(speech_server, &uri_get);
+
+            httpd_uri_t uri_status = {
+                .uri       = "/status",
+                .method    = HTTP_GET,
+                .handler   = status_handler,
+                .user_ctx  = NULL
+            };
+            httpd_register_uri_handler(speech_server, &uri_status);
+
+            // Add speech handler
+            httpd_uri_t uri_speak = {
+                .uri       = "/speak",
+                .method    = HTTP_GET,
+                .handler   = speak_handler,
+                .user_ctx  = NULL
+            };
+            httpd_register_uri_handler(speech_server, &uri_speak);
+             httpd_uri_t uri_stop = {
+                .uri       = "/stop",
+                .method    = HTTP_GET,
+                .handler   = stop_handler,
+                .user_ctx  = NULL
+            };
+            httpd_register_uri_handler(speech_server, &uri_stop);
+            ESP_LOGI(TAG, "🎅 Santa speech web server started successfully!");
+            web_speech_active = true;
+            
+        } else {
+            ESP_LOGE(TAG, "Failed to start Santa speech web server!");
+        }
+    }
+
+    void stop_speech_webserver(void) {
+        if (speech_server != NULL) {
+            httpd_stop(speech_server);
+            speech_server = NULL;
+            web_speech_active = false;
+            ESP_LOGI(TAG, "Santa speech web server stopped");
+        }
+    }
+
     void InitializeTools() {
         auto& mcp_server = McpServer::GetInstance();
         
@@ -292,7 +725,40 @@ private:
             return true;
         });
         
-        // NEW MCP TOOL: Open motor control panel
+        // NEW MCP TOOL: Open Santa speech control panel
+        mcp_server.AddTool("open_santa_speech_panel", "开启圣诞老人语音控制面板", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            ESP_LOGI(TAG, "🎅 Opening Santa speech control panel...");
+            
+            if (!WifiStation::GetInstance().IsConnected()) {
+                ESP_LOGW(TAG, "WiFi not connected, cannot start web server");
+                return "❌ WiFi not connected. Please connect to WiFi first.";
+            }
+            
+            // Set the web control panel flag in Application
+            auto& app = Application::GetInstance();
+            app.SetWebControlPanelActive(true);
+            
+            // Start the web server
+            start_speech_webserver();
+            
+            // Get IP address
+            esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+            esp_netif_ip_info_t ip_info;
+            esp_netif_get_ip_info(netif, &ip_info);
+            
+            char response[512];
+            snprintf(response, sizeof(response), 
+                    "🎅 Santa Speech Control Panel Started!\n"
+                    "📱 Open your browser and go to:\n"
+                    "🌐 http://" IPSTR ":8080\n"
+                    "🗣️ Type messages for Santa to speak\n"
+                    "🎄 Includes preset Christmas messages\n"
+                    "✨ Spread Christmas joy with Santa's voice!",
+                    IP2STR(&ip_info.ip));
+            
+            ESP_LOGI(TAG, "%s", response);
+            return response;
+        });
         
         mcp_server.AddTool("self_chassis_shake_hip", "摇屁股", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             ESP_LOGI(TAG, "Hip shake command received");
@@ -300,7 +766,7 @@ private:
             return true;
         });
 
-
+        
         mcp_server.AddTool("self_chassis_shake_body_start", "摇头1", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             HeadShake_start();
             return true;
@@ -309,6 +775,25 @@ private:
         mcp_server.AddTool("self_chassis_shake_body_stop", "摇头2", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             HeadShake_stop();
             return true;
+        });
+        mcp_server.AddTool("close_santa_speech_panel", "关闭圣诞老人语音控制面板", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
+            ESP_LOGI(TAG, "🎅 Closing Santa speech control panel...");
+            
+            // Clear the web control panel flag in Application
+            auto& app = Application::GetInstance();
+            app.SetWebControlPanelActive(false);
+            
+            // Force reset the application to idle state
+            app.Schedule([&app]() {
+                app.SetDeviceState(kDeviceStateIdle);
+                
+                // Clear any audio queues
+                // Note: You might need to make these methods public or add a public method to do this
+                ESP_LOGI(TAG, "🎅 Resetting device state after closing control panel");
+            });
+            
+            stop_speech_webserver();
+            return "🔴 Santa speech control panel closed. Web server stopped.";
         });
     }
 

@@ -73,9 +73,12 @@ public:
     void ToggleChatState();
     void StartListening();
     void StopListening();
+    void SpeakText(const std::string& text);
     void UpdateIotStates();
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
+    void SetWebControlPanelActive(bool active);
+    bool IsWebControlPanelActive() const;
     void PlaySound(const std::string_view& sound);
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -99,6 +102,7 @@ private:
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
 
+    bool web_control_panel_active_ = false;
     bool has_server_time_ = false;
     bool aborted_ = false;
     bool voice_detected_ = false;

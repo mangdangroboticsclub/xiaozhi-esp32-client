@@ -53,6 +53,7 @@ static const char* const STATE_STRINGS[] = {
 Application::Application() {
     event_group_ = xEventGroupCreate();
     background_task_ = new BackgroundTask(4096 * 7);
+    web_control_panel_active_ = false; // Initialize the web control panel flag
 
 #if CONFIG_USE_DEVICE_AEC
     aec_mode_ = kAecOnDeviceSide;
@@ -475,10 +476,27 @@ void Application::Start() {
         SetDeviceState(kDeviceStateIdle);
         Alert(Lang::Strings::ERROR, message.c_str(), "sad", Lang::Sounds::P3_EXCLAMATION);
     });
+    // Add this to your protocol OnIncomingAudio callback
     protocol_->OnIncomingAudio([this](AudioStreamPacket&& packet) {
+        ESP_LOGD(TAG, "Incoming audio: size=%zu, rate=%d, duration=%d, state=%s", 
+                packet.payload.size(), packet.sample_rate, packet.frame_duration, 
+                STATE_STRINGS[device_state_]);
+        
         std::lock_guard<std::mutex> lock(mutex_);
-        if (device_state_ == kDeviceStateSpeaking && audio_decode_queue_.size() < MAX_AUDIO_PACKETS_IN_QUEUE) {
+        
+        if (device_state_ == kDeviceStateSpeaking || web_control_panel_active_) {
+            if (audio_decode_queue_.size() >= MAX_AUDIO_PACKETS_IN_QUEUE) {
+                ESP_LOGW(TAG, "Audio queue full (%zu packets), provider may be sending too fast", 
+                        audio_decode_queue_.size());
+                // Conservative cleanup
+                size_t packets_to_remove = MAX_AUDIO_PACKETS_IN_QUEUE / 4;
+                for (size_t i = 0; i < packets_to_remove && !audio_decode_queue_.empty(); i++) {
+                    audio_decode_queue_.pop_front();
+                }
+            }
+            
             audio_decode_queue_.emplace_back(std::move(packet));
+            audio_decode_cv_.notify_all();
         }
     });
     protocol_->OnAudioChannelOpened([this, codec, &board]() {
@@ -521,96 +539,154 @@ void Application::Start() {
 #endif
 
             if (strcmp(state->valuestring, "start") == 0) {
-#ifdef CONFIG_BOARD_TYPE_HEYSANTA
-                auto now = std::chrono::steady_clock::now();
-                auto time_since_last_bell = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_bell_time).count();
-                auto time_since_mcp = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_mcp_time).count();
-                
-                // Record the start time of TTS
-                tts_start_time = now;
-                
-                // Don't play bell if:
-                // 1. Not enough time since last bell (cooldown)
-                // 2. Recent MCP activity (likely MCP response)
-                bool should_play_bell = (time_since_last_bell > BELL_COOLDOWN_MS) && 
-                                      (time_since_mcp > MCP_SUPPRESS_MS || last_mcp_time.time_since_epoch().count() == 0);
-                
-                if (should_play_bell) {
-                    ESP_LOGI(TAG, "TTS start - playing bell (bell cooldown: %d ms, MCP time: %d ms)", 
-                             (int)time_since_last_bell, (int)time_since_mcp);
-                    
-                    Schedule([this]() {
-                        ESP_LOGI(TAG, "Playing bell sound - device state: %s", STATE_STRINGS[device_state_]);
-                        
-                        aborted_ = false;
-                        if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
-                            SetDeviceState(kDeviceStateSpeaking);
-                        }
-                        
-                        background_task_->WaitForCompletion();
-                        ESP_LOGI(TAG, "Playing P3_TAHU for HEYSANTA");
-                        ResetDecoder();
-                        PlaySound(Lang::Sounds::P3_TAHU);
-                        ESP_LOGI(TAG, "P3_TAHU queued for HEYSANTA");
-                    });
-                    
-                    last_bell_time = now;
-                } else {
-                    ESP_LOGI(TAG, "TTS start - skipping bell (bell cooldown: %d ms, MCP suppress: %d ms)", 
-                             (int)time_since_last_bell, (int)time_since_mcp);
-                    
-                    Schedule([this]() {
-                        aborted_ = false;
-                        if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
-                            SetDeviceState(kDeviceStateSpeaking);
-                        }
-                    });
-                }
-#else
                 Schedule([this]() {
+                    // Clear any existing audio queues before starting new speech
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        audio_decode_queue_.clear();
+                        audio_send_queue_.clear();
+                    }
+                    audio_decode_cv_.notify_all();
+                    
+                    // Reset decoder to ensure clean state
+                    ResetDecoder();
+                    
                     aborted_ = false;
-                    if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+                    
+                    // If web control panel is active, force speaking state regardless of current state
+                    if (web_control_panel_active_) {
+                        SetDeviceState(kDeviceStateSpeaking);
+                    } else if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
                         SetDeviceState(kDeviceStateSpeaking);
                     }
+                    
+                    // Enable audio output
+                    auto codec = Board::GetInstance().GetAudioCodec();
+                    codec->EnableOutput(true);
                 });
+
+#ifdef CONFIG_BOARD_TYPE_HEYSANTA
+                // Only play bell if NOT from web control panel
+                if (!web_control_panel_active_) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto time_since_last_bell = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_bell_time).count();
+                    auto time_since_mcp = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_mcp_time).count();
+                    
+                    // Record the start time of TTS
+                    tts_start_time = now;
+                    
+                    // Don't play bell if:
+                    // 1. Not enough time since last bell (cooldown)
+                    // 2. Recent MCP activity (likely MCP response)
+                    bool should_play_bell = (time_since_last_bell > BELL_COOLDOWN_MS) && 
+                                        (time_since_mcp > MCP_SUPPRESS_MS || last_mcp_time.time_since_epoch().count() == 0);
+                    
+                    if (should_play_bell) {
+                        ESP_LOGI(TAG, "TTS start - playing bell (bell cooldown: %d ms, MCP time: %d ms)", 
+                                (int)time_since_last_bell, (int)time_since_mcp);
+                        
+                        Schedule([this]() {
+                            ESP_LOGI(TAG, "Playing bell sound - device state: %s", STATE_STRINGS[device_state_]);
+                            background_task_->WaitForCompletion();
+                            ESP_LOGI(TAG, "Playing P3_TAHU for HEYSANTA");
+                            ResetDecoder();
+                            PlaySound(Lang::Sounds::P3_TAHU);
+                            ESP_LOGI(TAG, "P3_TAHU queued for HEYSANTA");
+                        });
+                        
+                        last_bell_time = now;
+                    } else {
+                        ESP_LOGI(TAG, "TTS start - skipping bell (bell cooldown: %d ms, MCP suppress: %d ms)", 
+                                (int)time_since_last_bell, (int)time_since_mcp);
+                    }
+                } else {
+                    ESP_LOGI(TAG, "Web control panel active - skipping bell sound");
+                }
 #endif
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
                     background_task_->WaitForCompletion();
+                    
+                    // Clear any remaining audio packets
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        audio_decode_queue_.clear();
+                        audio_send_queue_.clear();
+                    }
+                    audio_decode_cv_.notify_all();
+                    
                     if (device_state_ == kDeviceStateSpeaking) {
 #ifdef CONFIG_BOARD_TYPE_HEYSANTA
-                        // Calculate the duration of TTS
-                        auto tts_end_time = std::chrono::steady_clock::now();
-                        auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tts_end_time - tts_start_time).count();
-                        ESP_LOGI(TAG, "TTS sequence complete: %d ms", (int)duration_ms);
+                        // Only do shake logic if NOT from web control panel
+                        if (!web_control_panel_active_) {
+                            // Calculate the duration of TTS
+                            auto tts_end_time = std::chrono::steady_clock::now();
+                            auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(tts_end_time - tts_start_time).count();
+                            ESP_LOGI(TAG, "TTS sequence complete: %d ms", (int)duration_ms);
 
-                        // Only trigger stop shake for longer TTS sequences (likely actual speech, not MCP responses)
-                        if (duration_ms > 2000) { // Only for TTS longer than 2 seconds
-                            ESP_LOGI(TAG, "Long TTS detected (%d ms), triggering stop shake", (int)duration_ms);
+                            // Only trigger stop shake for longer TTS sequences (likely actual speech, not MCP responses)
+                            if (duration_ms > 2000) { // Only for TTS longer than 2 seconds
+                                ESP_LOGI(TAG, "Long TTS detected (%d ms), triggering stop shake", (int)duration_ms);
 
-                            background_task_->Schedule([this]() {
-                                ESP_LOGI(TAG, "stop Head shake ");
-                                static int mcp_id_counter = 1000;
-                                mcp_id_counter++;
-                                char mcp_message[256];
-                                snprintf(mcp_message, sizeof(mcp_message),
-                                    "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_stop\",\"arguments\":{}}}",
-                                    mcp_id_counter);
-                                McpServer::GetInstance().ParseMessage(mcp_message);
-                                
-                                // Update MCP timestamp to suppress future bells
-                                static std::chrono::steady_clock::time_point last_mcp_time;
-                                last_mcp_time = std::chrono::steady_clock::now();
-                            });
+                                background_task_->Schedule([this]() {
+                                    ESP_LOGI(TAG, "stop Head shake ");
+                                    static int mcp_id_counter = 1000;
+                                    mcp_id_counter++;
+                                    char mcp_message[256];
+                                    snprintf(mcp_message, sizeof(mcp_message),
+                                        "{\"jsonrpc\":\"2.0\",\"id\":%d,\"method\":\"tools/call\",\"params\":{\"name\":\"self_chassis_shake_body_stop\",\"arguments\":{}}}",
+                                        mcp_id_counter);
+                                    McpServer::GetInstance().ParseMessage(mcp_message);
+                                    
+                                    // Update MCP timestamp to suppress future bells
+                                    static std::chrono::steady_clock::time_point last_mcp_time;
+                                    last_mcp_time = std::chrono::steady_clock::now();
+                                });
+                            } else {
+                                ESP_LOGI(TAG, "Short TTS detected (%d ms), skipping stop shake", (int)duration_ms);
+                            }
                         } else {
-                            ESP_LOGI(TAG, "Short TTS detected (%d ms), skipping stop shake", (int)duration_ms);
+                            ESP_LOGI(TAG, "Web control panel active - skipping shake logic");
                         }
 #endif
 
-                        if (listening_mode_ == kListeningModeManualStop) {
-                            SetDeviceState(kDeviceStateIdle);
+                        // Always go to idle first to clear audio queues and reset state
+                        SetDeviceState(kDeviceStateIdle);
+                        
+                        // Different behavior for web panel vs normal conversation
+                        if (web_control_panel_active_) {
+                            // Web panel: stay idle (like before)
+                            ESP_LOGI(TAG, "Web panel active - staying in idle state");
                         } else {
-                            SetDeviceState(kDeviceStateListening);
+                            // Normal conversation: auto-restart listening after brief pause (only for realtime mode)
+                            if (listening_mode_ == kListeningModeRealtime) {
+                                ESP_LOGI(TAG, "Scheduling auto-restart of listening mode in 1 second...");
+                                
+                                // Schedule a delayed restart of listening mode
+                                background_task_->Schedule([this]() {
+                                    // Wait 1 second to let everything settle
+                                    vTaskDelay(1000 / portTICK_PERIOD_MS);
+                                    
+                                    // Only restart if we're still idle and not using web panel
+                                    if (device_state_ == kDeviceStateIdle && !web_control_panel_active_) {
+                                        ESP_LOGI(TAG, "Auto-restarting listening mode for smooth conversation");
+                                        
+                                        Schedule([this]() {
+                                            if (!protocol_->IsAudioChannelOpened()) {
+                                                SetDeviceState(kDeviceStateConnecting);
+                                                if (!protocol_->OpenAudioChannel()) {
+                                                    return;
+                                                }
+                                            }
+                                            SetListeningMode(kListeningModeRealtime);
+                                        });
+                                    } else {
+                                        ESP_LOGI(TAG, "Not auto-restarting listening - device state changed or web panel active");
+                                    }
+                                });
+                            } else {
+                                ESP_LOGI(TAG, "Manual listening mode - staying in idle");
+                            }
                         }
                     }
                 });
@@ -930,6 +1006,16 @@ void Application::OnAudioOutput() {
     const int max_silence_seconds = 10;
 
     std::unique_lock<std::mutex> lock(mutex_);
+    
+    // More aggressive queue management
+    if (audio_decode_queue_.size() > MAX_AUDIO_PACKETS_IN_QUEUE) {
+        // Keep only the newest 50% of packets
+        size_t target_size = MAX_AUDIO_PACKETS_IN_QUEUE / 2;
+        while (audio_decode_queue_.size() > target_size) {
+            audio_decode_queue_.pop_front();
+        }
+        audio_decode_cv_.notify_all();
+    }
     if (audio_decode_queue_.empty()) {
         // Disable the output if there is no audio data for a long time
         if (device_state_ == kDeviceStateIdle) {
@@ -985,7 +1071,7 @@ void Application::OnAudioOutput() {
         
         // Resample if the sample rate is different
         if (decoder_sample_rate != codec->output_sample_rate()) {
-
+            
             int target_size = output_resampler_.GetOutputSamples(pcm.size());
             std::vector<int16_t> resampled(target_size);
             output_resampler_.Process(pcm.data(), pcm.size(), resampled.data());
@@ -1181,10 +1267,24 @@ void Application::SetDeviceState(DeviceState state) {
 
 void Application::ResetDecoder() {
     std::lock_guard<std::mutex> lock(mutex_);
-    opus_decoder_->ResetState();
+    
+    // Reset the opus decoder
+    if (opus_decoder_) {
+        opus_decoder_->ResetState();
+    }
+    
+    // Clear all audio queues
     audio_decode_queue_.clear();
+    audio_send_queue_.clear();
+    
+    // Notify waiting threads
     audio_decode_cv_.notify_all();
+    
+    // Reset timing and flags
     last_output_time_ = std::chrono::steady_clock::now();
+    busy_decoding_audio_ = false;
+    
+    // Ensure codec is ready
     auto codec = Board::GetInstance().GetAudioCodec();
     codec->EnableOutput(true);
 }
@@ -1311,4 +1411,98 @@ void Application::SetAecMode(AecMode mode) {
             protocol_->CloseAudioChannel();
         }
     });
+}
+
+void Application::SpeakText(const std::string& text) {
+    ESP_LOGI("Application", "🎅 === SpeakText() CALLED ===");
+    ESP_LOGI("Application", "🎅 Input text: '%s' (length: %d)", text.c_str(), (int)text.length());
+    
+    if (text.empty()) {
+        ESP_LOGW("Application", "🎅 Text is empty, not sending to server");
+        return;
+    }
+    
+    // URL decode the text first
+    std::string decoded_text;
+    for (size_t i = 0; i < text.length(); i++) {
+        if (text[i] == '+') {
+            decoded_text += ' ';
+        } else if (text[i] == '%' && i + 2 < text.length()) {
+            // Convert hex to char
+            std::string hex = text.substr(i + 1, 2);
+            char decoded_char = (char)strtol(hex.c_str(), NULL, 16);
+            decoded_text += decoded_char;
+            i += 2; // Skip the two hex digits
+        } else {
+            decoded_text += text[i];
+        }
+    }
+    
+    ESP_LOGI("Application", "🎅 Decoded text: '%s'", decoded_text.c_str());
+    
+    // Set web control panel active to ensure TTS plays
+    SetWebControlPanelActive(true);
+    
+    // Prepare the device for TTS playback
+    Schedule([this]() {
+        ESP_LOGI("Application", "🎅 Preparing device for TTS playback");
+        
+        // Make sure audio channel is open
+        if (!protocol_->IsAudioChannelOpened()) {
+            ESP_LOGI("Application", "🎅 Opening audio channel for TTS");
+            SetDeviceState(kDeviceStateConnecting);
+            if (!protocol_->OpenAudioChannel()) {
+                ESP_LOGE("Application", "🎅 Failed to open audio channel");
+                return;
+            }
+        }
+        
+        // Force speaking state
+        ESP_LOGI("Application", "🎅 Setting device to speaking state");
+        SetDeviceState(kDeviceStateSpeaking);
+        
+        // Enable audio output explicitly
+        auto codec = Board::GetInstance().GetAudioCodec();
+        codec->EnableOutput(true);
+        ESP_LOGI("Application", "🎅 Audio output enabled");
+        
+        // Clear and reset audio decoder
+        ResetDecoder();
+        ESP_LOGI("Application", "🎅 Audio decoder reset");
+    });
+    
+    // Create MCP message for text-to-speech
+    uint32_t message_id = esp_random() % 10000;
+    ESP_LOGI("Application", "🎅 Generated message ID: %lu", (unsigned long)message_id);
+    
+    std::string mcp_message = "{\"jsonrpc\":\"2.0\",\"id\":" + 
+                             std::to_string(message_id) + 
+                             ",\"method\":\"tts/speak\",\"params\":{\"text\":\"" + 
+                             decoded_text + "\",\"voice\":\"santa\"}}";
+    
+    ESP_LOGI("Application", "🎅 Created MCP message: %s", mcp_message.c_str());
+    ESP_LOGI("Application", "🎅 MCP message length: %d", (int)mcp_message.length());
+    
+    // Check if protocol is available
+    if (!protocol_) {
+        ESP_LOGE("Application", "🎅 ERROR: protocol_ is NULL! Cannot send message");
+        return;
+    }
+    
+    ESP_LOGI("Application", "🎅 Protocol available, sending MCP message...");
+    
+    // Send the MCP message
+    protocol_->SendMcpMessage(mcp_message);
+    
+    ESP_LOGI("Application", "🎅 === MCP MESSAGE SENT TO SERVER ===");
+    ESP_LOGI("Application", "🎅 SpeakText() completed successfully");
+}
+
+// Add these methods for web control panel support
+void Application::SetWebControlPanelActive(bool active) {
+    web_control_panel_active_ = active;
+}
+
+bool Application::IsWebControlPanelActive() const {
+    return web_control_panel_active_;
 }
